@@ -1,10 +1,7 @@
 import base64
-import hashlib
 import json
 import time
 import uuid
-
-from cryptography.hazmat.primitives import serialization
 
 
 def create_challenge():
@@ -12,7 +9,6 @@ def create_challenge():
     Create a random challenge that a resource server
     can send to a token holder.
     """
-
     return {
         "challenge": str(uuid.uuid4()),
         "timestamp": int(time.time()),
@@ -23,7 +19,6 @@ def canonicalize_challenge(challenge):
     """
     Convert the challenge into deterministic bytes.
     """
-
     return json.dumps(
         challenge,
         sort_keys=True,
@@ -31,12 +26,36 @@ def canonicalize_challenge(challenge):
     ).encode("utf-8")
 
 
+def encode_challenge(challenge):
+    """
+    Encode the complete challenge into a transport-safe
+    base64url string.
+    """
+    data = canonicalize_challenge(challenge)
+
+    return base64.urlsafe_b64encode(
+        data
+    ).rstrip(b"=").decode()
+
+
+def decode_challenge(encoded):
+    """
+    Decode a base64url-encoded challenge.
+    """
+    padding = "=" * (-len(encoded) % 4)
+
+    data = base64.urlsafe_b64decode(
+        encoded + padding
+    )
+
+    return json.loads(data.decode("utf-8"))
+
+
 def sign_challenge(private_key, challenge):
     """
     Sign the resource server challenge using the
     holder's private key.
     """
-
     data = canonicalize_challenge(challenge)
 
     signature = private_key.sign(data)
@@ -54,7 +73,6 @@ def verify_challenge(
     """
     Verify a proof-of-possession signature.
     """
-
     padding = "=" * (-len(signature) % 4)
 
     signature_bytes = base64.urlsafe_b64decode(
@@ -74,6 +92,7 @@ def verify_challenge(
     except Exception:
         return False
 
+
 def verify_token_proof(
     token_payload,
     challenge,
@@ -83,7 +102,6 @@ def verify_token_proof(
     Verify that the caller possesses the private key
     corresponding to the key bound to the AAT.
     """
-
     from aat.verify import jwk_to_public_key
 
     holder_jwk = token_payload["cnf"]["jwk"]

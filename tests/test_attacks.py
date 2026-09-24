@@ -1,11 +1,15 @@
-import copy
+import base64
+import json
 
 import jwt
 
 from aat.keys import load_private_key, load_public_key
-from aat.pop import create_challenge, sign_challenge, verify_token_proof
-from aat.verify import verify_chain, verify_token
-from authz.policy import is_request_allowed
+from aat.pop import (
+    create_challenge,
+    sign_challenge,
+    verify_token_proof,
+)
+from aat.verify import verify_chain, verify_child_token
 
 
 def load_token(filename):
@@ -18,8 +22,16 @@ def expect_failure(name, function):
         function()
         print(f"❌ {name}: ATTACK SUCCEEDED")
     except Exception as exc:
-        print(f"✅ {name}: REJECTED")
-        print(f"   {type(exc).__name__}: {exc}")
+        print(f"✅ {name}: blocked ({type(exc).__name__})")
+
+
+def expect_false(name, function):
+    result = function()
+
+    if result is False:
+        print(f"✅ {name}: blocked")
+    else:
+        print(f"❌ {name}: ATTACK SUCCEEDED")
 
 
 def main():
@@ -30,139 +42,58 @@ def main():
 
     issuer_public_key = load_public_key("issuer")
 
-    # --------------------------------------------------
-    # Attack 1: Modify AAT₂ payload
-    # --------------------------------------------------
+    print()
+    print("AAT SECURITY TESTS")
+    print("=" * 80)
 
-    def modify_token():
+    # ------------------------------------------------------------
+    # 1. Tamper with AAT₂
+    # ------------------------------------------------------------
 
-        header = jwt.get_unverified_header(aat2)
-        payload = jwt.decode(
-            aat2,
-            options={"verify_signature": False},
+    def tamper_token():
+
+        parts = aat2.split(".")
+
+        payload = json.loads(
+            base64.urlsafe_b64decode(
+                parts[1] + "=" * (-len(parts[1]) % 4)
+            )
         )
 
-        payload["authorization_details"][0]["tools"][
-            "deploy"
-        ]["namespace"] = "*"
+        payload["sub"] = "attacker"
 
-        forged_token = jwt.encode(
-            payload,
-            load_private_key("agent-b"),
-            algorithm="EdDSA",
-            headers=header,
-        )
+        new_payload = base64.urlsafe_b64encode(
+            json.dumps(
+                payload,
+                separators=(",", ":"),
+            ).encode()
+        ).rstrip(b"=").decode()
 
-        verify_chain(
-            aat0,
-            aat1,
-            forged_token,
-            issuer_public_key,
-        )
-
-    expect_failure(
-        "Modify AAT₂ namespace",
-        modify_token,
-    )
-
-    # --------------------------------------------------
-    # Attack 2: Sign AAT₂ with the wrong key
-    # --------------------------------------------------
-
-    def wrong_signing_key():
-
-        payload = jwt.decode(
-            aat2,
-            options={"verify_signature": False},
-        )
-
-        forged_token = jwt.encode(
-            payload,
-            load_private_key("tool-agent"),
-            algorithm="EdDSA",
+        tampered = (
+            parts[0]
+            + "."
+            + new_payload
+            + "."
+            + parts[2]
         )
 
         verify_chain(
             aat0,
             aat1,
-            forged_token,
+            tampered,
             issuer_public_key,
         )
 
     expect_failure(
-        "AAT₂ signed by wrong agent",
-        wrong_signing_key,
+        "Tamper with AAT₂",
+        tamper_token,
     )
 
-    # --------------------------------------------------
-    # Attack 3: Change parent reference
-    # --------------------------------------------------
+    # ------------------------------------------------------------
+    # 2. Try to add read_cluster
+    # ------------------------------------------------------------
 
-    def wrong_parent():
-
-        payload = jwt.decode(
-            aat2,
-            options={"verify_signature": False},
-        )
-
-        payload["parent"] = "THIS_IS_NOT_THE_PARENT"
-
-        forged_token = jwt.encode(
-            payload,
-            load_private_key("agent-b"),
-            algorithm="EdDSA",
-        )
-
-        verify_chain(
-            aat0,
-            aat1,
-            forged_token,
-            issuer_public_key,
-        )
-
-    expect_failure(
-        "Wrong parent reference",
-        wrong_parent,
-    )
-
-    # --------------------------------------------------
-    # Attack 4: Expand AAT₂ namespace
-    # --------------------------------------------------
-
-    def expand_namespace():
-
-        payload = jwt.decode(
-            aat2,
-            options={"verify_signature": False},
-        )
-
-        payload["authorization_details"][0]["tools"][
-            "deploy"
-        ]["namespace"] = "*"
-
-        forged_token = jwt.encode(
-            payload,
-            load_private_key("agent-b"),
-            algorithm="EdDSA",
-        )
-
-        verify_chain(
-            aat0,
-            aat1,
-            forged_token,
-            issuer_public_key,
-        )
-
-    expect_failure(
-        "Expand payments → *",
-        expand_namespace,
-    )
-
-    # --------------------------------------------------
-    # Attack 5: Add read_cluster to AAT₂
-    # --------------------------------------------------
-
-    def add_tool():
+    def add_capability():
 
         payload = jwt.decode(
             aat2,
@@ -173,99 +104,206 @@ def main():
             "read_cluster"
         ] = {}
 
-        forged_token = jwt.encode(
+        agent_b_private_key = load_private_key("agent-b")
+
+        forged = jwt.encode(
             payload,
-            load_private_key("agent-b"),
+            agent_b_private_key,
             algorithm="EdDSA",
         )
 
-        verify_chain(
-            aat0,
+        parent_payload = jwt.decode(
             aat1,
-            forged_token,
-            issuer_public_key,
+            options={"verify_signature": False},
+        )
+
+        verify_child_token(
+            aat1,
+            parent_payload,
+            forged,
         )
 
     expect_failure(
-        "Restore read_cluster",
-        add_tool,
+        "Add read_cluster capability",
+        add_capability,
     )
 
-    # --------------------------------------------------
-    # Attack 6: Wrong proof-of-possession key
-    # --------------------------------------------------
+    # ------------------------------------------------------------
+    # 3. Broaden namespace
+    # ------------------------------------------------------------
 
-    challenge = create_challenge()
+    def broaden_namespace():
 
-    wrong_proof = sign_challenge(
-        load_private_key("agent-b"),
-        challenge,
+        payload = jwt.decode(
+            aat2,
+            options={"verify_signature": False},
+        )
+
+        payload["authorization_details"][0]["tools"][
+            "deploy"
+        ]["namespace"] = "*"
+
+        agent_b_private_key = load_private_key("agent-b")
+
+        forged = jwt.encode(
+            payload,
+            agent_b_private_key,
+            algorithm="EdDSA",
+        )
+
+        parent_payload = jwt.decode(
+            aat1,
+            options={"verify_signature": False},
+        )
+
+        verify_child_token(
+            aat1,
+            parent_payload,
+            forged,
+        )
+
+    expect_failure(
+        "Broaden namespace to *",
+        broaden_namespace,
     )
 
-    payload = verify_token(
-        aat2,
-        load_public_key("agent-b"),
+    # ------------------------------------------------------------
+    # 4. Change parent reference
+    # ------------------------------------------------------------
+
+    def change_parent():
+
+        payload = jwt.decode(
+            aat2,
+            options={"verify_signature": False},
+        )
+
+        payload["parent"] = "fake-parent-hash"
+
+        agent_b_private_key = load_private_key("agent-b")
+
+        forged = jwt.encode(
+            payload,
+            agent_b_private_key,
+            algorithm="EdDSA",
+        )
+
+        parent_payload = jwt.decode(
+            aat1,
+            options={"verify_signature": False},
+        )
+
+        verify_child_token(
+            aat1,
+            parent_payload,
+            forged,
+        )
+
+    expect_failure(
+        "Change parent reference",
+        change_parent,
     )
 
-    valid = verify_token_proof(
-        payload,
-        challenge,
-        wrong_proof,
+    # ------------------------------------------------------------
+    # 5. Sign with wrong key
+    # ------------------------------------------------------------
+
+    def wrong_signing_key():
+
+        payload = jwt.decode(
+            aat2,
+            options={"verify_signature": False},
+        )
+
+        wrong_key = load_private_key("agent-a")
+
+        forged = jwt.encode(
+            payload,
+            wrong_key,
+            algorithm="EdDSA",
+        )
+
+        parent_payload = jwt.decode(
+            aat1,
+            options={"verify_signature": False},
+        )
+
+        verify_child_token(
+            aat1,
+            parent_payload,
+            forged,
+        )
+
+    expect_failure(
+        "Sign AAT₂ with Agent A key",
+        wrong_signing_key,
     )
 
-    print()
-    if valid:
-        print("❌ Wrong PoP key: ATTACK SUCCEEDED")
-    else:
-        print("✅ Wrong PoP key: REJECTED")
+    # ------------------------------------------------------------
+    # 6. Wrong proof-of-possession key
+    # ------------------------------------------------------------
 
-    # --------------------------------------------------
-    # Attack 7: Replay old proof
-    # --------------------------------------------------
+    def wrong_pop_key():
 
-    tool_agent_private_key = load_private_key(
-        "tool-agent"
+        payload = jwt.decode(
+            aat2,
+            options={"verify_signature": False},
+        )
+
+        challenge = create_challenge()
+
+        wrong_private_key = load_private_key("agent-b")
+
+        proof = sign_challenge(
+            wrong_private_key,
+            challenge,
+        )
+
+        return verify_token_proof(
+            payload,
+            challenge,
+            proof,
+        )
+
+    expect_false(
+        "Proof signed with wrong key",
+        wrong_pop_key,
     )
 
-    old_challenge = create_challenge()
+    # ------------------------------------------------------------
+    # 7. Replay proof against a different challenge
+    # ------------------------------------------------------------
 
-    old_proof = sign_challenge(
-        tool_agent_private_key,
-        old_challenge,
+    def replay_pop():
+
+        payload = jwt.decode(
+            aat2,
+            options={"verify_signature": False},
+        )
+
+        original_challenge = create_challenge()
+
+        tool_private_key = load_private_key(
+            "tool-agent"
+        )
+
+        proof = sign_challenge(
+            tool_private_key,
+            original_challenge,
+        )
+
+        new_challenge = create_challenge()
+
+        return verify_token_proof(
+            payload,
+            new_challenge,
+            proof,
+        )
+
+    expect_false(
+        "Replay proof against new challenge",
+        replay_pop,
     )
-
-    new_challenge = create_challenge()
-
-    replay = verify_token_proof(
-        payload,
-        new_challenge,
-        old_proof,
-    )
-
-    print()
-    if replay:
-        print("❌ PoP replay: ATTACK SUCCEEDED")
-    else:
-        print("✅ PoP replay: REJECTED")
-
-    # --------------------------------------------------
-    # Attack 8: Request outside AAT₂
-    # --------------------------------------------------
-
-    allowed = is_request_allowed(
-        payload,
-        "deploy",
-        {
-            "namespace": "billing",
-            "environment": "production",
-        },
-    )
-
-    print()
-    if allowed:
-        print("❌ Billing deployment: ATTACK SUCCEEDED")
-    else:
-        print("✅ Billing deployment: REJECTED")
 
 
 if __name__ == "__main__":

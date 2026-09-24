@@ -1,36 +1,27 @@
 from aat.attenuation import extract_tools
 
 
-def is_request_allowed(token_payload, tool, request_constraints):
+def is_request_allowed(token_payload, action, constraints):
     """
-    Determine whether a request is authorised by the AAT.
-
-    The request must:
-    - use a tool granted by the token
-    - satisfy every constraint on that tool
+    Check whether a request is allowed by the capabilities
+    contained in the AAT.
     """
 
     tools = extract_tools(token_payload)
 
-    if tool not in tools:
+    if action not in tools:
         return False
 
-    token_constraints = tools[tool]
+    allowed_constraints = tools[action]
 
-    for name, allowed_value in token_constraints.items():
+    for name, value in allowed_constraints.items():
 
-        # Token requires this constraint, so the request
-        # must provide it.
-        if name not in request_constraints:
+        if name not in constraints:
             return False
 
-        requested_value = request_constraints[name]
+        request_value = constraints[name]
 
-        # '*' means any value is permitted.
-        if allowed_value == "*":
-            continue
-
-        if requested_value != allowed_value:
+        if value != "*" and value != request_value:
             return False
 
     return True

@@ -1,21 +1,23 @@
 # Attenuating Authorization Tokens (AAT) Proof of Concept
 
-A hands-on Python proof of concept exploring **Attenuating Authorization Tokens (AATs)** for secure delegation between users, agents, and tools.
+A hands-on Python proof of concept exploring **Attenuating Authorization Tokens (AATs)** for secure delegation between users, agents, tools, and resource servers.
 
 The project is based on the IETF Internet-Draft:
 
-> OAuth Attenuating Agent Tokens
+> OAuth Attenuating Agent Tokens  
 > `draft-niyikiza-oauth-attenuating-agent-tokens-01`
 
-The goal is to understand and demonstrate how an authorization token can be passed through a chain of agents while ensuring that **each delegation can only reduce the authority available to the next participant**.
+The goal is to understand and demonstrate how authorization can be passed through a chain of agents while ensuring that **each delegation can only reduce the authority available to the next participant**.
+
+The project now includes a working end-to-end HTTP flow where a client obtains a challenge from a FastAPI resource server, proves possession of the private key bound to the final AAT, and performs an authorized deployment request.
 
 ---
 
-## 1. Overview
+# 1. Overview
 
 Traditional authorization generally looks like:
 
-```
+```text
 User
   |
   v
@@ -27,7 +29,7 @@ Resource Server
 
 An agentic system introduces additional delegation:
 
-```
+```text
 User
   |
   v
@@ -40,7 +42,7 @@ Agent B
 Tool
   |
   v
-Resource
+Resource Server
 ```
 
 This creates an important security problem.
@@ -54,12 +56,13 @@ This proof of concept explores a cryptographic delegation model where each child
 3. Is signed by the holder of the parent token.
 4. Contains a restricted set of capabilities.
 5. Is bound to the key of the next holder.
-6. Can require proof-of-possession of that key.
+6. Requires proof-of-possession of that key at the resource server.
 7. Can be validated as part of the complete delegation chain.
+8. Is evaluated against the actual resource request.
 
 The fundamental security property is:
 
-```
+```text
 Capabilities(AAT₂) ⊆ Capabilities(AAT₁) ⊆ Capabilities(AAT₀)
 ```
 
@@ -73,38 +76,39 @@ The project is deliberately being built incrementally.
 
 The main goals are to understand:
 
-* Public/private key cryptography
-* Ed25519 signatures
-* JWTs
-* JSON Web Keys (JWKs)
-* Holder binding
-* Proof-of-possession
-* Delegation chains
-* Parent-token references
-* Capability attenuation
-* Authorization decisions
-* Agent-to-agent delegation
-* Security attacks against delegated authorization
+- Public/private key cryptography
+- Ed25519 signatures
+- JWTs
+- JSON Web Keys (JWKs)
+- Holder binding
+- Proof-of-possession
+- Delegation chains
+- Parent-token references
+- Capability attenuation
+- Authorization decisions
+- Agent-to-agent delegation
+- HTTP resource-server enforcement
+- Security attacks against delegated authorization
 
 The eventual goal is to integrate the model with:
 
-* OAuth
-* Keycloak
-* A resource server
-* Real HTTP APIs
-* Actual agent workflows
-* Potentially an LLM-based agent
+- OAuth
+- Keycloak
+- OAuth token exchange
+- Real agent services
+- LLM-based agents
+- Real HTTP APIs
+- Kubernetes/OpenShift
 
 ---
 
-# 3. Conceptual Architecture
+# 3. Current Architecture
 
 The current architecture is:
 
-```
+```text
 User
   |
-  | AAT₀
   v
 Root Issuer
   |
@@ -118,12 +122,25 @@ Agent B
   |
   | AAT₂
   v
-Tool / Resource Server
+Tool Agent / Client
+  |
+  | AAT₂
+  | Challenge
+  | Proof-of-Possession
+  v
+FastAPI Resource Server
+  |
+  | Verify chain
+  | Verify attenuation
+  | Verify PoP
+  | Evaluate policy
+  v
+ALLOW / DENY
 ```
 
 Each participant has its own cryptographic key pair.
 
-```
+```text
 Root Issuer
     |
     +-- issuer private key
@@ -153,27 +170,27 @@ Only the corresponding public key is included as the holder binding.
 
 # 4. Delegation Example
 
-The proof of concept uses the following example.
+The proof of concept uses a deployment example.
 
 ## AAT₀
 
-The root issuer gives Paul authority to:
+The root issuer grants authority to:
 
-* Deploy to any namespace
-* Read the cluster
+- Deploy to any namespace
+- Read the cluster
 
 Conceptually:
 
-```
+```text
 deploy:
   namespace: "*"
 
 read_cluster: {}
 ```
 
-The token is held by Agent A.
+The token is bound to Agent A.
 
-```
+```text
 Root Issuer
      |
      | AAT₀
@@ -189,15 +206,16 @@ Root Issuer
 
 Agent A delegates to Agent B.
 
-Agent A reduces the deployment authority:
+Agent A reduces the deployment authority to:
 
-```
-deploy(namespace=payments)
+```text
+deploy:
+  namespace: payments
 ```
 
 The `read_cluster` capability is removed entirely.
 
-```
+```text
 Agent A
      |
      | AAT₁
@@ -208,52 +226,36 @@ Agent A
 
 This is valid because:
 
-```
+```text
 deploy(payments) ⊆ deploy(*)
 ```
-
-The `read_cluster` capability has not been delegated.
 
 ---
 
 ## AAT₂
 
-Agent B delegates to the tool agent.
+Agent B delegates to the Tool Agent.
 
 Agent B adds another restriction:
 
-```
-deploy(
-    namespace=payments,
-    environment=production
-)
-```
-
-The resulting authority is:
-
-```
-deploy(
-    namespace=payments,
-    environment=production
-)
+```text
+deploy:
+  namespace: payments
+  environment: production
 ```
 
 The chain therefore becomes:
 
-```
+```text
 AAT₀
 deploy(namespace=*)
 read_cluster
-
     |
     v
-
 AAT₁
 deploy(namespace=payments)
-
     |
     v
-
 AAT₂
 deploy(
     namespace=payments,
@@ -265,17 +267,17 @@ At every step the authority becomes narrower.
 
 ---
 
-# 5. The Core Security Property
+# 5. Core Security Property
 
 The central property being demonstrated is:
 
-```
+```text
 Child authority ⊆ Parent authority
 ```
 
 or:
 
-```
+```text
 Capabilities(AAT₂)
     ⊆
 Capabilities(AAT₁)
@@ -285,18 +287,18 @@ Capabilities(AAT₀)
 
 A child may:
 
-* Remove a capability.
-* Add a restriction.
-* Narrow an existing capability.
-* Delegate to another holder.
+- Remove a capability.
+- Add a restriction.
+- Narrow an existing capability.
+- Delegate to another holder.
 
 A child must not:
 
-* Add a new capability.
-* Remove an existing parent restriction.
-* Broaden an existing constraint.
-* Change the parent reference.
-* Pretend to have been signed by another holder.
+- Add a new capability.
+- Remove an existing parent restriction.
+- Broaden an existing constraint.
+- Change its relationship to the supplied parent.
+- Pretend to have been signed by another holder.
 
 ---
 
@@ -306,7 +308,7 @@ The proof of concept uses **Ed25519** keys.
 
 Each participant has:
 
-```
+```text
 Private Key
     |
     | signs
@@ -317,25 +319,25 @@ Public Key
     |
     | verifies
     v
-   JWT signature
+JWT signature
 ```
 
-Ed25519 is being used because it provides:
+Ed25519 provides:
 
-* Public/private key signatures
-* Small keys
-* Fast signing
-* Fast verification
-* Good support in Python's `cryptography` library
-* Native support through PyJWT's EdDSA handling
+- Public/private key signatures
+- Small keys
+- Fast signing
+- Fast verification
+- Support in Python's `cryptography` library
+- Support through PyJWT's EdDSA implementation
 
-The project is using asymmetric signatures rather than a shared secret.
+The project uses asymmetric signatures rather than a shared secret.
 
 This is important for delegation.
 
-Agent A does not need the root issuer's private key.
+Agent A does not need the Root Issuer's private key.
 
-Instead, Agent A signs a new token with its own private key.
+Instead, Agent A signs its child token with Agent A's own private key.
 
 ---
 
@@ -343,7 +345,7 @@ Instead, Agent A signs a new token with its own private key.
 
 The current keys are:
 
-```
+```text
 keys/
 ├── issuer-private.pem
 ├── issuer-public.pem
@@ -355,9 +357,9 @@ keys/
 └── tool-agent-public.pem
 ```
 
-The relationship is:
+The signing relationship is:
 
-```
+```text
 issuer-private
       |
       | signs
@@ -386,22 +388,20 @@ agent-b-private
       |
       | holder = Tool Agent public key
       v
-  Tool Agent
+ Tool Agent
 ```
 
-The private key is used to sign.
-
-The public key is used to verify.
+The Tool Agent private key is then used to prove possession of the holder key bound to AAT₂.
 
 ---
 
 # 8. Important Key Security Rule
 
-The private keys must never be committed to Git.
+Private keys must never be committed to Git.
 
-The `.gitignore` contains:
+Recommended `.gitignore` entries:
 
-```
+```gitignore
 .venv/
 keys/*-private.pem
 __pycache__/
@@ -410,25 +410,25 @@ __pycache__/
 
 If a private key is exposed, it should be considered compromised.
 
-For a real implementation, private keys would normally be protected by something such as:
+For a real implementation, private keys would normally be protected by mechanisms such as:
 
-* Hardware-backed keys
-* Cloud KMS
-* HSM
-* Vault
-* OS key stores
-* Workload identity
-* TPM-backed credentials
+- Hardware-backed keys
+- Cloud KMS
+- HSM
+- Vault
+- OS key stores
+- Workload identity
+- TPM-backed credentials
 
-The PEM files are only being used because this is a local proof of concept.
+PEM files are being used only because this is a local proof of concept.
 
 ---
 
 # 9. Project Structure
 
-The project is structured approximately as follows:
+The current project is structured approximately as follows:
 
-```
+```text
 aat-poc/
 │
 ├── .venv/
@@ -453,7 +453,9 @@ aat-poc/
 │   ├── agent_a.py
 │   └── agent_b.py
 │
-├── resource/
+├── server/
+│   ├── __init__.py
+│   └── server.py
 │
 ├── tests/
 │   ├── generate_keys.py
@@ -464,7 +466,8 @@ aat-poc/
 │   ├── verify_chain.py
 │   ├── test_policy.py
 │   ├── test_authorization.py
-│   └── test_attacks.py
+│   ├── test_attacks.py
+│   └── client.py
 │
 ├── keys/
 │
@@ -476,7 +479,9 @@ aat-poc/
 └── README.md
 ```
 
-Some of the later components are part of the planned implementation and will be added as the proof of concept develops.
+The resource-server package is called `server` rather than `resource`.
+
+This avoids a collision with Python's standard-library `resource` module.
 
 ---
 
@@ -484,41 +489,40 @@ Some of the later components are part of the planned implementation and will be 
 
 The project was developed on OpenSUSE Tumbleweed using Python.
 
-Create the project:
+Create the project directories:
 
-```
-mkdir -p ~/workspace/aat-poc/{aat,issuer,agents,resource,tests,authz,keys}
-
+```bash
+mkdir -p ~/workspace/aat-poc/{aat,issuer,agents,server,tests,authz,keys}
 cd ~/workspace/aat-poc
 ```
 
 Create a virtual environment:
 
-```
+```bash
 python3 -m venv .venv
 ```
 
 Activate it:
 
-```
+```bash
 source .venv/bin/activate
 ```
 
-Install the required packages:
+Install dependencies:
 
-```
+```bash
 pip install cryptography PyJWT fastapi uvicorn
 ```
 
-Save the dependencies:
+Save dependencies:
 
-```
+```bash
 pip freeze > requirements.txt
 ```
 
 For subsequent sessions:
 
-```
+```bash
 cd ~/workspace/aat-poc
 source .venv/bin/activate
 ```
@@ -531,19 +535,13 @@ The project currently uses the repository root as the Python module path.
 
 Run scripts using:
 
-```
+```bash
 PYTHONPATH=. python tests/generate_keys.py
-```
-
-rather than:
-
-```
-python tests/generate_keys.py
 ```
 
 This allows imports such as:
 
-```
+```python
 from aat.keys import load_private_key
 ```
 
@@ -555,19 +553,19 @@ to work correctly.
 
 Generate all four key pairs:
 
-```
+```bash
 PYTHONPATH=. python tests/generate_keys.py
 ```
 
 Expected output:
 
-```
+```text
 Keys generated.
 ```
 
 This creates:
 
-```
+```text
 keys/
 ├── issuer-private.pem
 ├── issuer-public.pem
@@ -581,23 +579,23 @@ keys/
 
 ---
 
-# 13. Important Key Regeneration Warning
+# 13. Key Regeneration Warning
 
 Regenerating the keys invalidates previously generated tokens.
 
 For example:
 
-```
+```text
 old AAT₀
     |
     | signed by old issuer key
     X
-new issuer key
+new issuer public key
 ```
 
-Therefore, after regenerating keys, regenerate the complete token chain:
+After regenerating keys, regenerate the complete token chain:
 
-```
+```bash
 PYTHONPATH=. python issuer/issuer.py
 PYTHONPATH=. python agents/agent_a.py
 PYTHONPATH=. python agents/agent_b.py
@@ -605,13 +603,13 @@ PYTHONPATH=. python agents/agent_b.py
 
 ---
 
-# 14. Root Token - AAT₀
+# 14. Root Token — AAT₀
 
-The root issuer creates the first authorization token.
+The Root Issuer creates the first authorization token.
 
-The token contains:
+The token contains claims including:
 
-```
+```text
 iss
 sub
 jti
@@ -623,35 +621,39 @@ cnf
 authorization_details
 ```
 
-The important authorization information is:
+The important authorization information is conceptually:
 
-```
-"authorization_details": [
-  {
-    "type": "attenuating_agent_token",
-    "tools": {
-      "deploy": {
-        "namespace": "*"
-      },
-      "read_cluster": {}
+```json
+{
+  "authorization_details": [
+    {
+      "type": "attenuating_agent_token",
+      "tools": {
+        "deploy": {
+          "namespace": "*"
+        },
+        "read_cluster": {}
+      }
     }
-  }
-]
+  ]
+}
 ```
 
 The holder is represented using `cnf`:
 
-```
-"cnf": {
-  "jwk": {
-    "kty": "OKP",
-    "crv": "Ed25519",
-    "x": "..."
+```json
+{
+  "cnf": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "..."
+    }
   }
 }
 ```
 
-This means that the token is bound to Agent A's public key.
+This binds the token to Agent A's public key.
 
 ---
 
@@ -659,111 +661,93 @@ This means that the token is bound to Agent A's public key.
 
 Run:
 
-```
+```bash
 PYTHONPATH=. python issuer/issuer.py
 ```
 
 This creates:
 
-```
+```text
 aat0.jwt
 ```
 
-The issuer signs the token with:
+The Root Issuer signs the token using:
 
-```
+```text
 issuer-private.pem
 ```
 
 The token is intended for Agent A.
 
-The holder binding contains:
-
-```
-agent-a-public.pem
-```
-
-in JWK form.
+The holder binding contains Agent A's public key in JWK form.
 
 ---
 
 # 16. JWT Structure
 
-A JWT consists conceptually of:
+A JWT consists of:
 
-```
+```text
 HEADER.PAYLOAD.SIGNATURE
-```
-
-For example:
-
-```
-eyJhbGciOiJFZERTQSJ9
-.
-eyJpc3MiOiJodHRwczovL2FhdC1wb2MubG9j...
-.
-signature
 ```
 
 The payload can be decoded for inspection without verifying the signature.
 
-However, decoding is not verification.
+However:
 
-This is important.
+> Decoding is not verification.
 
-An attacker can modify an unsigned JWT payload.
+An attacker can construct or modify JWT payload data.
 
-Only signature verification establishes that the payload was signed by the expected key.
+Only cryptographic signature verification establishes that the token was signed by the expected key.
 
 ---
 
-# 17. AAT₁ - Agent A Delegation
+# 17. AAT₁ — Agent A Delegation
 
 Agent A receives:
 
-```
+```text
 AAT₀
 ```
 
 Agent A creates:
 
-```
+```text
 AAT₁
 ```
 
 The new token is signed with:
 
-```
+```text
 agent-a-private.pem
 ```
 
 The holder is changed to:
 
-```
+```text
 agent-b-public.pem
 ```
 
 The capability is reduced to:
 
-```
+```text
 deploy:
   namespace: payments
 ```
 
 The `read_cluster` capability is not delegated.
 
-The important relationship is:
+The relationship is:
 
-```
+```text
 AAT₀
   |
   | holder = Agent A
-  |
   v
 Agent A
   |
   | signs AAT₁
-  |
   v
 AAT₁
   |
@@ -778,13 +762,13 @@ Agent B
 
 Run:
 
-```
+```bash
 PYTHONPATH=. python agents/agent_a.py
 ```
 
 This creates:
 
-```
+```text
 aat1.jwt
 ```
 
@@ -800,102 +784,76 @@ The current proof of concept uses a SHA-256 hash of the complete parent JWT.
 
 Conceptually:
 
-```
-parent_token
-      |
-      | SHA-256
-      v
-parent_hash
-      |
-      v
-AAT₁.parent
-```
-
-For example:
-
-```
-{
-  "parent": "qJ7..."
-}
+```text
+parent JWT
+    |
+    | SHA-256
+    v
+parent hash
+    |
+    v
+child.parent
 ```
 
-This provides a simple cryptographic link between:
-
-```
-AAT₀
-```
-
-and:
-
-```
-AAT₁
-```
+This cryptographically links the child to the exact parent token from which it was derived.
 
 ---
 
 # 20. Why Hash the Parent?
 
-The parent hash provides an important property.
-
-Suppose an attacker sends:
-
-```
-AAT₁
-```
-
-with a different parent.
+Suppose an attacker supplies AAT₁ with a different AAT₀.
 
 The verifier calculates:
 
-```
+```text
 SHA256(supplied_parent)
 ```
 
 and compares it with:
 
-```
+```text
 AAT₁.parent
 ```
 
 If they do not match:
 
-```
+```text
 REJECT
 ```
 
-This prevents the child token from being detached from the parent token it claims to derive from.
+This prevents a child token from being detached from the parent token it claims to derive from.
 
 ---
 
-# 21. AAT₂ - Agent B Delegation
+# 21. AAT₂ — Agent B Delegation
 
 Agent B receives:
 
-```
+```text
 AAT₁
 ```
 
-Agent B creates:
+and creates:
 
-```
+```text
 AAT₂
 ```
 
-Agent B signs it with:
+Agent B signs it using:
 
-```
+```text
 agent-b-private.pem
 ```
 
 The holder becomes:
 
-```
+```text
 tool-agent-public.pem
 ```
 
 The capability becomes:
 
-```
+```text
 deploy:
   namespace: payments
   environment: production
@@ -909,19 +867,19 @@ This further restricts the authority.
 
 Run:
 
-```
+```bash
 PYTHONPATH=. python agents/agent_b.py
 ```
 
 This creates:
 
-```
+```text
 aat2.jwt
 ```
 
 The resulting chain is:
 
-```
+```text
 Root Issuer
      |
      | AAT₀
@@ -943,7 +901,7 @@ Root Issuer
 
 The complete chain is:
 
-```
+```text
 AAT₀
 │
 ├── issuer = Root Issuer
@@ -951,12 +909,9 @@ AAT₀
 └── capabilities:
       deploy(namespace=*)
       read_cluster
-
         │
         │ signed by Agent A
-        │
         v
-
 AAT₁
 │
 ├── issuer = Agent A
@@ -964,12 +919,9 @@ AAT₁
 ├── parent = hash(AAT₀)
 └── capabilities:
       deploy(namespace=payments)
-
         │
         │ signed by Agent B
-        │
         v
-
 AAT₂
 │
 ├── issuer = Agent B
@@ -986,35 +938,30 @@ AAT₂
 
 # 24. Delegation Depth
 
-The tokens also contain:
+Tokens contain:
 
-```
-"del_depth": 0,
-"del_max_depth": 3
-```
-
-The intended meaning is:
-
-```
-AAT₀
-del_depth = 0
-
-AAT₁
-del_depth = 1
-
-AAT₂
-del_depth = 2
+```json
+{
+  "del_depth": 0,
+  "del_max_depth": 3
+}
 ```
 
-The maximum permitted delegation depth is:
+The intended progression is:
 
+```text
+AAT₀ → del_depth = 0
+AAT₁ → del_depth = 1
+AAT₂ → del_depth = 2
 ```
+
+The maximum permitted delegation depth is represented by:
+
+```text
 del_max_depth = 3
 ```
 
-This provides another mechanism for limiting delegation chains.
-
-A future implementation should enforce the depth limit during delegation.
+The fields are currently present in the POC, but full delegation-depth enforcement remains a hardening task.
 
 ---
 
@@ -1022,25 +969,25 @@ A future implementation should enforce the depth limit during delegation.
 
 The attenuation implementation lives in:
 
-```
+```text
 aat/attenuation.py
 ```
 
-The key function is:
+The key logic determines whether the child capabilities are no broader than the parent capabilities.
 
-```
-is_attenuation(parent_payload, child_payload)
-```
+The basic invariant is:
 
-It checks whether the child capabilities are no broader than the parent capabilities.
+```text
+child ⊆ parent
+```
 
 ---
 
-# 26. Capability Example
+# 26. Wildcard Example
 
 Parent:
 
-```
+```json
 {
   "deploy": {
     "namespace": "*"
@@ -1050,7 +997,7 @@ Parent:
 
 Child:
 
-```
+```json
 {
   "deploy": {
     "namespace": "payments"
@@ -1060,10 +1007,10 @@ Child:
 
 This is allowed because:
 
-```
+```text
 *
- |
- +-- payments
+|
++-- payments
 ```
 
 The child has less authority.
@@ -1074,7 +1021,7 @@ The child has less authority.
 
 If the parent contains:
 
-```
+```json
 {
   "deploy": {
     "namespace": "payments"
@@ -1084,7 +1031,7 @@ If the parent contains:
 
 then this child is valid:
 
-```
+```json
 {
   "deploy": {
     "namespace": "payments"
@@ -1092,9 +1039,9 @@ then this child is valid:
 }
 ```
 
-But this is invalid:
+but this is invalid:
 
-```
+```json
 {
   "deploy": {
     "namespace": "billing"
@@ -1102,13 +1049,7 @@ But this is invalid:
 }
 ```
 
-because:
-
-```
-payments != billing
-```
-
-The child cannot change the parent's restriction.
+because the child cannot change an existing restricted value.
 
 ---
 
@@ -1118,7 +1059,7 @@ A child may add a new restriction.
 
 Parent:
 
-```
+```json
 {
   "deploy": {
     "namespace": "payments"
@@ -1128,7 +1069,7 @@ Parent:
 
 Child:
 
-```
+```json
 {
   "deploy": {
     "namespace": "payments",
@@ -1137,9 +1078,9 @@ Child:
 }
 ```
 
-This is allowed.
+This is allowed by the current POC.
 
-The child has introduced an additional restriction rather than broadening the authority.
+The child has introduced an additional restriction rather than broadening the existing authority.
 
 ---
 
@@ -1149,7 +1090,7 @@ Removing a capability is allowed.
 
 Parent:
 
-```
+```json
 {
   "deploy": {},
   "read_cluster": {}
@@ -1158,7 +1099,7 @@ Parent:
 
 Child:
 
-```
+```json
 {
   "deploy": {}
 }
@@ -1168,7 +1109,7 @@ The child has less authority.
 
 Therefore:
 
-```
+```text
 Child ⊆ Parent
 ```
 
@@ -1182,46 +1123,39 @@ Adding a capability is not allowed.
 
 Parent:
 
-```
+```json
 {
   "deploy": {}
 }
 ```
 
-Child:
+Invalid child:
 
-```
+```json
 {
   "deploy": {},
   "delete_cluster": {}
 }
 ```
 
-This must be rejected.
-
-The child cannot invent:
-
-```
-delete_cluster
-```
-
-because it was not granted by the parent.
+The child cannot invent `delete_cluster` because the parent did not delegate it.
 
 ---
 
 # 31. Current Constraint Model
 
-The current proof of concept deliberately uses a simple constraint model.
+The proof of concept deliberately uses a simple constraint model.
 
-The current rules are:
+Current rules:
 
 1. `*` means any value.
 2. A specific parent value must be retained by the child.
 3. A child may add additional restrictions.
 4. A child may remove capabilities.
 5. A child cannot add new capabilities.
+6. A child cannot broaden an existing constraint.
 
-This is intended as a teaching implementation rather than a complete implementation of all possible AAT/RAR constraint semantics.
+This is intended as a teaching implementation rather than a complete general-purpose authorization language.
 
 ---
 
@@ -1229,21 +1163,19 @@ This is intended as a teaching implementation rather than a complete implementat
 
 The chain verifier lives in:
 
-```
+```text
 aat/verify.py
 ```
 
-The verifier performs several checks.
-
 For AAT₀:
 
-```
+```text
 Verify signature using Root Issuer public key
 ```
 
 For AAT₁:
 
-```
+```text
 Read AAT₀ holder key
         |
         v
@@ -1258,7 +1190,7 @@ Verify attenuation
 
 For AAT₂:
 
-```
+```text
 Read AAT₁ holder key
         |
         v
@@ -1277,32 +1209,13 @@ Verify attenuation
 
 Run:
 
-```
+```bash
 PYTHONPATH=. python tests/verify_chain.py
-```
-
-Expected result:
-
-```
-AAT₀ VERIFIED
-================================================================================
-
-...
-
-AAT₁ VERIFIED
-================================================================================
-
-...
-
-AAT₂ VERIFIED
-================================================================================
-
-...
 ```
 
 A successful verification means:
 
-```
+```text
 Root signature valid
         +
 AAT₁ signed by AAT₀ holder
@@ -1322,156 +1235,106 @@ AAT₂ attenuates AAT₁
 
 # 34. Holder Binding
 
-AATs are not only about signing.
+AATs are not only about signatures.
 
-They also bind the token to a specific key.
+They also bind a token to a specific holder key.
 
 The binding is represented by:
 
-```
-"cnf": {
-  "jwk": {
-    "kty": "OKP",
-    "crv": "Ed25519",
-    "x": "..."
+```json
+{
+  "cnf": {
+    "jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "..."
+    }
   }
 }
 ```
 
-The `cnf` value identifies the public key of the intended holder.
-
 For example:
 
-```
+```text
 AAT₂
   |
-  +-- cnf
-       |
-       +-- Tool Agent public key
+  +-- cnf.jwk
+        |
+        +-- Tool Agent public key
 ```
 
-The tool agent must therefore demonstrate possession of the corresponding private key.
+The Tool Agent must demonstrate possession of the corresponding private key.
 
 ---
 
-# 35. Proof of Possession
+# 35. Proof-of-Possession
 
 A bearer token can potentially be used by anyone who obtains it.
 
 Proof-of-possession changes this model.
 
-The resource server generates a challenge:
+The resource server creates a challenge.
 
-```
+Conceptually:
+
+```json
 {
   "challenge": "random-value",
   "timestamp": 1234567890
 }
 ```
 
-The legitimate token holder signs the challenge with its private key.
+The legitimate token holder signs the challenge using its private key.
 
-The resource server then verifies the signature using the public key contained in:
+The resource server verifies the signature using the public key contained in:
 
-```
+```text
 AAT₂.cnf.jwk
 ```
 
 The flow becomes:
 
-```
+```text
 Resource Server
        |
        | challenge
        v
    Tool Agent
        |
-       | sign(challenge)
+       | sign challenge
        v
 Resource Server
        |
-       | verify using cnf public key
+       | verify using AAT₂ cnf key
        v
      ALLOW
 ```
 
 ---
 
-# 36. Proof-of-Possession Test
+# 36. Local Proof-of-Possession Tests
 
 Run:
 
-```
+```bash
 PYTHONPATH=. python tests/test_pop.py
 ```
 
-The expected results are:
+The tests demonstrate:
 
-```
-VALID PROOF?
-================================================================================
-True
+- Correct private key succeeds.
+- Wrong private key fails.
+- A proof generated for a different challenge fails.
 
-ATTACKER USING AGENT B KEY
-================================================================================
-False
-
-REPLAY ATTACK
-================================================================================
-False
-```
-
-This demonstrates three important properties.
-
-### Correct private key
-
-```
-Tool Agent private key
-        |
-        v
-valid signature
-```
-
-Result:
-
-```
-True
-```
-
-### Wrong private key
-
-```
-Agent B private key
-        |
-        v
-invalid signature for Tool Agent key
-```
-
-Result:
-
-```
-False
-```
-
-### Replay
-
-A signature generated for one challenge is not valid for a different challenge.
-
-Result:
-
-```
-False
-```
+This proves that simply possessing the JWT is not enough to generate a valid proof.
 
 ---
 
-# 37. Token-Bound Proof of Possession
-
-The next test demonstrates PoP directly against the key contained in the AAT.
+# 37. Token-Bound Proof-of-Possession
 
 Run:
 
-```
+```bash
 PYTHONPATH=. python tests/test_aat_pop.py
 ```
 
@@ -1482,69 +1345,72 @@ The test:
 3. Extracts the holder key from `cnf`.
 4. Creates a challenge.
 5. Signs the challenge using the Tool Agent private key.
-6. Verifies the proof against the key contained in the token.
+6. Verifies the proof against the public key contained in AAT₂.
 
-Expected result:
+The important question is no longer simply:
 
-```
-AAT₂ PROOF OF POSSESSION
-================================================================================
-True
+```text
+Do you possess AAT₂?
 ```
 
-This is an important distinction.
+Instead:
 
-The resource server does not simply ask:
-
-```
-"Do you have AAT₂?"
-```
-
-It can ask:
-
-```
-"Can you prove that you possess the private key bound to AAT₂?"
+```text
+Can you prove that you possess the private key
+corresponding to the public key bound to AAT₂?
 ```
 
 ---
 
-# 38. Authorization Policy
-
-The authorization layer is separate from cryptographic verification.
+# 38. Authorization Is a Separate Layer
 
 Cryptographic verification answers:
 
-```
+```text
 Is this token authentic?
 ```
 
 Attenuation verification answers:
 
-```
+```text
 Is this delegated authority within the parent's authority?
 ```
 
 Proof-of-possession answers:
 
-```
-Does the caller possess the bound key?
+```text
+Does the caller possess the private key bound to the token?
 ```
 
-Policy answers:
+Policy evaluation answers:
 
-```
-Is this particular request permitted?
+```text
+Is this specific requested operation permitted?
 ```
 
 These are different security decisions.
 
 ---
 
-# 39. Example Resource Request
+# 39. Authorization Policy
 
-Suppose the resource receives:
+The policy layer lives in:
 
+```text
+authz/policy.py
 ```
+
+Suppose the final token grants:
+
+```text
+deploy:
+  namespace: payments
+  environment: production
+```
+
+The request:
+
+```json
 {
   "action": "deploy",
   "namespace": "payments",
@@ -1552,32 +1418,11 @@ Suppose the resource receives:
 }
 ```
 
-AAT₂ grants:
+is allowed.
 
-```
-{
-  "deploy": {
-    "namespace": "payments",
-    "environment": "production"
-  }
-}
-```
+A request for:
 
-The request matches the token.
-
-Therefore the policy engine can return:
-
-```
-ALLOW
-```
-
----
-
-# 40. Denied Namespace
-
-Suppose the request is:
-
-```
+```json
 {
   "action": "deploy",
   "namespace": "billing",
@@ -1585,31 +1430,11 @@ Suppose the request is:
 }
 ```
 
-AAT₂ only permits:
+is denied.
 
-```
-namespace=payments
-```
+A request for:
 
-Therefore:
-
-```
-billing != payments
-```
-
-and the request must be denied.
-
-```
-DENY
-```
-
----
-
-# 41. Denied Environment
-
-Suppose the request is:
-
-```
+```json
 {
   "action": "deploy",
   "namespace": "payments",
@@ -1617,186 +1442,107 @@ Suppose the request is:
 }
 ```
 
-AAT₂ requires:
+is denied.
 
-```
-environment=production
-```
+A request for:
 
-Therefore:
-
-```
-development != production
-```
-
-and the request must be denied.
-
----
-
-# 42. Denied Capability
-
-Suppose the request is:
-
-```
+```json
 {
   "action": "read_cluster"
 }
 ```
 
-Although AAT₀ originally contained:
-
-```
-read_cluster
-```
-
-AAT₁ did not delegate it.
-
-Therefore AAT₂ does not contain it.
-
-The request must be denied.
-
-This demonstrates why the complete delegation chain matters.
-
-The resource server must not simply look at what the original user was allowed to do.
-
-It must determine what the **current holder** was delegated.
+is also denied because that capability was removed earlier in the delegation chain.
 
 ---
 
-# 43. End-to-End Authorization
+# 40. Authorization Decision Layer
 
-The eventual resource-server authorization flow should look like:
+The higher-level authorization logic lives in:
 
-```
-Request
-   |
-   v
-Resource Server
-   |
-   v
-Verify AAT chain
-   |
-   +------------------+
-   |                  |
- valid              invalid
-   |                  |
-   v                  v
-Verify PoP           DENY
-   |
-   +-------------+
-   |             |
- valid        invalid
-   |             |
-   v             v
-Evaluate       DENY
- policy
-   |
-   +-------+
-   |       |
- ALLOW    DENY
+```text
+authz/decision.py
 ```
 
-This separation is important.
+The authorization decision combines:
+
+```text
+Chain verification
+       +
+Attenuation verification
+       +
+Proof-of-possession
+       +
+Request policy
+       =
+Authorization decision
+```
+
+The resource server therefore does not rely on any single check.
 
 ---
 
-# 44. The Security Boundary
+# 41. Attack Tests
 
-The resource server should ultimately be responsible for the final authorization decision.
+Automated attack testing is implemented in:
 
-The resource server should not blindly trust:
-
-```
-Agent A
+```text
+tests/test_attacks.py
 ```
 
-or:
+The current security tests successfully block:
 
-```
-Agent B
+```text
+AAT SECURITY TESTS
+================================================================================
+✅ Tamper with AAT₂: blocked (InvalidSignatureError)
+✅ Add read_cluster capability: blocked (ValueError)
+✅ Broaden namespace to *: blocked (ValueError)
+✅ Change parent reference: blocked (ValueError)
+✅ Sign AAT₂ with Agent A key: blocked (InvalidSignatureError)
+✅ Proof signed with wrong key: blocked
+✅ Replay proof against new challenge: blocked
 ```
 
-Instead it should independently verify:
-
-```
-AAT chain
-+
-signatures
-+
-parent relationships
-+
-attenuation
-+
-holder binding
-+
-proof of possession
-+
-request policy
-```
+These tests turn the intended security properties into executable checks.
 
 ---
 
-# 45. Attack Scenarios
+# 42. Attack — Modify AAT₂
 
-One of the main purposes of the proof of concept is to demonstrate attacks.
+An attacker modifies the payload of AAT₂.
 
-The planned security test suite includes:
+For example:
 
-1. Modify token payload
-2. Forge token signature
-3. Use wrong signing key
-4. Replace parent token
-5. Expand capabilities
-6. Add a new tool
-7. Remove a parent restriction
-8. Change namespace
-9. Change environment
-10. Replay PoP
-11. Use wrong PoP key
-12. Skip a delegation level
-13. Exceed delegation depth
-14. Substitute a different holder
-15. Use an expired token
-
----
-
-# 46. Attack: Modify JWT Payload
-
-Suppose an attacker changes:
-
-```
+```text
 namespace=payments
 ```
 
-to:
+becomes:
 
-```
+```text
 namespace=*
 ```
 
 The JWT payload changes.
 
-However, the signature no longer matches.
+The existing signature no longer matches.
 
-Verification must therefore fail.
+Result:
 
+```text
+InvalidSignatureError
 ```
-Modified payload
-       |
-       v
-Signature mismatch
-       |
-       v
-      DENY
-```
+
+The request is rejected.
 
 ---
 
-# 47. Attack: Add a Capability
+# 43. Attack — Add a Capability
 
-Original:
+AAT₁ contains:
 
-```
+```json
 {
   "deploy": {
     "namespace": "payments"
@@ -1804,289 +1550,854 @@ Original:
 }
 ```
 
-Attacker attempts:
+An attacker attempts to create a child containing:
 
-```
+```json
 {
   "deploy": {
     "namespace": "payments"
   },
-  "delete_cluster": {}
+  "read_cluster": {}
 }
 ```
 
 The child capability does not exist in the parent.
 
-The attenuation check must reject it.
+The attenuation check rejects the token.
 
 ---
 
-# 48. Attack: Broaden a Restriction
+# 44. Attack — Broaden Namespace
 
 Parent:
 
-```
-{
-  "deploy": {
-    "namespace": "payments"
-  }
-}
+```text
+namespace=payments
 ```
 
 Attacker attempts:
 
-```
-{
-  "deploy": {
-    "namespace": "*"
-  }
-}
+```text
+namespace=*
 ```
 
-This attempts to broaden:
+This changes a specific constraint into a wildcard.
 
-```
-payments
-```
+That would increase authority.
 
-into:
-
-```
-*
-```
-
-The child is therefore outside the parent's authority.
-
-Result:
-
-```
-DENY
-```
+The attenuation check rejects it.
 
 ---
 
-# 49. Attack: Change the Parent
+# 45. Attack — Change Parent Reference
 
-Suppose AAT₁ was generated from AAT₀.
+Suppose AAT₂ was created from AAT₁.
 
-An attacker attempts to claim:
-
-```
-AAT₁.parent = hash(attacker-controlled-token)
-```
+An attacker attempts to modify the parent reference.
 
 The verifier calculates:
 
-```
-hash(actual supplied parent)
+```text
+SHA256(actual AAT₁)
 ```
 
-and compares it to the token's `parent`.
+and compares it with:
 
-The mismatch causes rejection.
+```text
+AAT₂.parent
+```
+
+A mismatch results in rejection.
 
 ---
 
-# 50. Attack: Use the Wrong Signing Key
+# 46. Attack — Wrong Delegation Signing Key
 
-Suppose AAT₂ should be signed by Agent B.
+AAT₂ must be signed by Agent B because AAT₁ is bound to Agent B.
 
-An attacker signs AAT₂ with Agent A's private key.
+An attacker signs AAT₂ using Agent A's private key.
 
-The verifier obtains the expected signer from:
-
-```
-AAT₁.cnf
-```
-
-which identifies Agent B.
+The verifier extracts Agent B's public key from AAT₁ and attempts verification.
 
 The Agent A signature does not verify against Agent B's public key.
 
 Result:
 
+```text
+InvalidSignatureError
 ```
+
+---
+
+# 47. Attack — Wrong PoP Key
+
+AAT₂ is bound to the Tool Agent's public key.
+
+An attacker attempts to generate the proof using another private key.
+
+The resource server verifies the signature against:
+
+```text
+AAT₂.cnf.jwk
+```
+
+The proof fails.
+
+Result:
+
+```text
 DENY
 ```
 
 ---
 
-# 51. Attack: Steal the Token
+# 48. Attack — Proof Against a Different Challenge
 
-AAT₂ is copied by an attacker.
+A proof is generated for:
 
-Without proof-of-possession, the attacker might be able to present the token as a bearer credential.
-
-With holder binding:
-
+```text
+Challenge A
 ```
+
+The attacker attempts to use that proof with:
+
+```text
+Challenge B
+```
+
+Because the signed data is different, signature verification fails.
+
+This demonstrates that the proof is cryptographically bound to the challenge.
+
+---
+
+# 49. FastAPI Resource Server
+
+The POC now includes a real HTTP resource server implemented using FastAPI.
+
+The server lives in:
+
+```text
+server/server.py
+```
+
+Start it with:
+
+```bash
+PYTHONPATH=. uvicorn server.server:app --host 0.0.0.0 --port 8000
+```
+
+The server runs on:
+
+```text
+http://localhost:8000
+```
+
+---
+
+# 50. Why the Package Is Called `server`
+
+The resource-server code was originally placed under a package called:
+
+```text
+resource
+```
+
+This caused:
+
+```text
+ModuleNotFoundError:
+No module named 'resource.policy';
+'resource' is not a package
+```
+
+because Python already has a standard-library module called `resource`.
+
+The package was therefore renamed to:
+
+```text
+server
+```
+
+The FastAPI application is started using:
+
+```bash
+PYTHONPATH=. uvicorn server.server:app --host 0.0.0.0 --port 8000
+```
+
+---
+
+# 51. FastAPI Dependency
+
+FastAPI and Uvicorn must be installed inside the project's virtual environment.
+
+Activate the environment:
+
+```bash
+source .venv/bin/activate
+```
+
+Then install:
+
+```bash
+pip install fastapi uvicorn
+```
+
+The shell prompt should show something similar to:
+
+```text
+(.venv)
+```
+
+before starting the application.
+
+---
+
+# 52. Challenge Endpoint
+
+The resource server exposes:
+
+```text
+GET /challenge
+```
+
+Test it using:
+
+```bash
+curl http://localhost:8000/challenge
+```
+
+The response now looks like:
+
+```json
+{
+  "challenge": "eyJjaGFsbGVuZ2UiOiIzNTdjNjU1Ny00YjQ0LTQyZjEtYjdlYi01ZTlhNDliNGNjYzkiLCJ0aW1lc3RhbXAiOjE3OTAyNDI1NjF9",
+  "expires_in": 300
+}
+```
+
+The challenge value is a transport-safe encoded representation of the challenge object.
+
+---
+
+# 53. Why the Challenge Was Changed
+
+An earlier version returned:
+
+```json
+{
+  "challenge": "3e711a70-b199-45af-9bac-3e9a8cf20cbc",
+  "timestamp": 1790242465
+}
+```
+
+The HTTP PoP flow was improved so that the exact object being signed can be transported without the client and server independently reconstructing it.
+
+The challenge now contains an encoded representation of data such as:
+
+```json
+{
+  "challenge": "d4a7ba6e-b64c-436a-943c-1726a76a4b26",
+  "timestamp": 1790242631
+}
+```
+
+This reduces the risk of the client and server signing/verifying slightly different serialized data.
+
+---
+
+# 54. Challenge Lifetime
+
+The challenge response includes:
+
+```json
+{
+  "expires_in": 300
+}
+```
+
+This represents a five-minute challenge lifetime.
+
+The challenge should be:
+
+- Short-lived
+- Unpredictable
+- Bound to the proof
+- Ideally single-use
+
+The current POC demonstrates challenge binding.
+
+A production implementation should additionally maintain server-side challenge state to guarantee that a successfully used challenge cannot be replayed.
+
+---
+
+# 55. HTTP Proof-of-Possession Flow
+
+The complete HTTP PoP flow is:
+
+```text
+Tool Agent
+    |
+    | GET /challenge
+    v
+Resource Server
+    |
+    | encoded challenge
+    v
+Tool Agent
+    |
+    | decode challenge
+    |
+    | sign exact challenge
+    | using tool-agent-private.pem
+    v
+HTTP Request
+    |
+    | Authorization: Bearer AAT₂
+    | X-AAT-Challenge: <challenge>
+    | X-AAT-Proof: <signature>
+    v
+Resource Server
+```
+
+The server extracts the Tool Agent public key from:
+
+```text
+AAT₂.cnf.jwk
+```
+
+and verifies the proof.
+
+---
+
+# 56. Deploy Endpoint
+
+The resource server exposes:
+
+```text
+POST /deploy
+```
+
+The intended request contains:
+
+```text
+Authorization: Bearer <AAT₂>
+X-AAT-Challenge: <encoded challenge>
+X-AAT-Proof: <signature>
+```
+
+and a JSON body describing the requested deployment.
+
+For example:
+
+```json
+{
+  "namespace": "payments",
+  "environment": "production"
+}
+```
+
+---
+
+# 57. Resource-Server Authorization Flow
+
+The `/deploy` request is processed conceptually as:
+
+```text
+Incoming request
+      |
+      v
+Extract AAT₂
+      |
+      v
+Verify AAT chain
+      |
+      +--------------------+
+      |                    |
+    valid                invalid
+      |                    |
+      v                    v
+Verify challenge          DENY
+and PoP
+      |
+      +--------------------+
+      |                    |
+    valid                invalid
+      |                    |
+      v                    v
+Evaluate policy           DENY
+      |
+      +--------------------+
+      |                    |
+    allow                 deny
+      |                    |
+      v                    v
+    200                  DENY
+```
+
+---
+
+# 58. End-to-End HTTP Client
+
+The project includes:
+
+```text
+tests/client.py
+```
+
+Run it while the FastAPI server is running:
+
+```bash
+PYTHONPATH=. python tests/client.py
+```
+
+The client:
+
+1. Requests a challenge.
+2. Receives the encoded challenge.
+3. Decodes the challenge.
+4. Signs the challenge using the Tool Agent private key.
+5. Loads AAT₂.
+6. Sends the token, challenge, proof and deployment request to the server.
+7. Displays the response.
+
+---
+
+# 59. Successful End-to-End Test
+
+A successful client run currently looks like:
+
+```text
+ENCODED CHALLENGE
+================================================================================
+eyJjaGFsbGVuZ2UiOiJkNGE3YmE2ZS1iNjRjLTQzNmEtOTQzYy0xNzI2YTc2YTRiMjYiLCJ0aW1lc3RhbXAiOjE3OTAyNDI2MzF9
+
+CHALLENGE
+================================================================================
+{
+  "challenge": "d4a7ba6e-b64c-436a-943c-1726a76a4b26",
+  "timestamp": 1790242631
+}
+
+PROOF
+================================================================================
+3tQPT5bPU93XH3D-nO9DOMAsu_pgMQ0Cxe8KzuFpkxyQsn3nEfwHnOn2tiE9IfMsONk5PbRoczp7QvCkSWBNDQ
+
+SERVER RESPONSE
+================================================================================
+200
+{"status":"deployed","namespace":"payments","environment":"production"}
+```
+
+This demonstrates the first complete HTTP authorization flow in the POC.
+
+---
+
+# 60. What the Successful HTTP Test Proves
+
+The `200` response means the request passed multiple security checks.
+
+Conceptually:
+
+```text
+AAT₀ valid
+   +
+AAT₁ valid
+   +
+AAT₂ valid
+   +
+parent chain valid
+   +
+attenuation valid
+   +
+Tool Agent proves possession
+   +
+deploy capability exists
+   +
+namespace = payments
+   +
+environment = production
+   =
+ALLOW
+```
+
+The server then returns:
+
+```json
+{
+  "status": "deployed",
+  "namespace": "payments",
+  "environment": "production"
+}
+```
+
+The current endpoint simulates the deployment action.
+
+It does not yet perform a real Kubernetes/OpenShift deployment.
+
+---
+
+# 61. Current Resource-Server Token Resolution
+
+The current resource server is intentionally simplified.
+
+The server has access to the earlier chain members:
+
+```text
+aat0.jwt
+aat1.jwt
+```
+
+while the final token is supplied by the client:
+
+```text
 AAT₂
-  |
-  +-- cnf = Tool Agent public key
 ```
 
-the resource server can require the attacker to prove possession of the corresponding private key.
+Conceptually:
 
-The attacker does not have it.
+```text
+Server filesystem
+    |
+    +-- AAT₀
+    +-- AAT₁
 
-Therefore:
-
+HTTP request
+    |
+    +-- AAT₂
 ```
-DENY
+
+The server then reconstructs and verifies:
+
+```text
+AAT₀ → AAT₁ → AAT₂
+```
+
+This is appropriate for demonstrating the security model, but a future implementation should dynamically resolve or transport the delegation chain.
+
+---
+
+# 62. Expiry Handling
+
+Tokens contain:
+
+```text
+iat
+exp
+```
+
+PyJWT validates token expiry.
+
+If a token has expired:
+
+```text
+jwt.exceptions.ExpiredSignatureError
+```
+
+is raised.
+
+During development, this occurred when an older AAT chain was reused after its one-hour token lifetime had elapsed.
+
+The fix is to regenerate the token chain:
+
+```bash
+PYTHONPATH=. python issuer/issuer.py
+PYTHONPATH=. python agents/agent_a.py
+PYTHONPATH=. python agents/agent_b.py
+```
+
+Expired tokens being rejected is expected security behaviour.
+
+---
+
+# 63. Current Run Sequence
+
+Activate the virtual environment:
+
+```bash
+cd ~/workspace/aat-poc
+source .venv/bin/activate
+```
+
+Generate keys if required:
+
+```bash
+PYTHONPATH=. python tests/generate_keys.py
+```
+
+Generate AAT₀:
+
+```bash
+PYTHONPATH=. python issuer/issuer.py
+```
+
+Generate AAT₁:
+
+```bash
+PYTHONPATH=. python agents/agent_a.py
+```
+
+Generate AAT₂:
+
+```bash
+PYTHONPATH=. python agents/agent_b.py
+```
+
+Verify the chain:
+
+```bash
+PYTHONPATH=. python tests/verify_chain.py
+```
+
+Run policy tests:
+
+```bash
+PYTHONPATH=. python tests/test_policy.py
+```
+
+Run authorization tests:
+
+```bash
+PYTHONPATH=. python tests/test_authorization.py
+```
+
+Run PoP tests:
+
+```bash
+PYTHONPATH=. python tests/test_pop.py
+```
+
+Run token-bound PoP tests:
+
+```bash
+PYTHONPATH=. python tests/test_aat_pop.py
+```
+
+Run attack tests:
+
+```bash
+PYTHONPATH=. python tests/test_attacks.py
+```
+
+Start the HTTP server:
+
+```bash
+PYTHONPATH=. uvicorn server.server:app --host 0.0.0.0 --port 8000
+```
+
+In another terminal:
+
+```bash
+cd ~/workspace/aat-poc
+source .venv/bin/activate
+PYTHONPATH=. python tests/client.py
 ```
 
 ---
 
-# 52. Attack: Replay a PoP
+# 64. Complete Current End-to-End Flow
 
-An attacker captures:
+The current working system can be represented as:
 
+```text
+                         USER
+                           |
+                           v
+                     ROOT ISSUER
+                           |
+                           | signs
+                           |
+                           v
+                         AAT₀
+                           |
+                           | holder = Agent A
+                           v
+                       AGENT A
+                           |
+                           | attenuates
+                           | signs
+                           v
+                         AAT₁
+                           |
+                           | holder = Agent B
+                           v
+                       AGENT B
+                           |
+                           | attenuates
+                           | signs
+                           v
+                         AAT₂
+                           |
+                           | holder = Tool Agent
+                           v
+                     TOOL AGENT
+                           |
+                           | GET /challenge
+                           v
+                  FASTAPI RESOURCE SERVER
+                           |
+                           | encoded challenge
+                           v
+                     TOOL AGENT
+                           |
+                           | signs challenge
+                           | using private key
+                           |
+                           | POST /deploy
+                           | AAT₂
+                           | challenge
+                           | proof
+                           v
+                  FASTAPI RESOURCE SERVER
+                           |
+                           | verify AAT₀
+                           | verify AAT₁
+                           | verify AAT₂
+                           | verify parent hashes
+                           | verify attenuation
+                           | verify PoP
+                           | evaluate policy
+                           v
+                       ALLOW / DENY
 ```
+
+---
+
+# 65. Security Boundary
+
+The resource server is responsible for the final authorization decision.
+
+It does not blindly trust:
+
+```text
+Agent A
+```
+
+or:
+
+```text
+Agent B
+```
+
+or:
+
+```text
+Tool Agent
+```
+
+Instead it independently verifies:
+
+```text
+AAT chain
+    +
+signatures
+    +
+parent relationships
+    +
+attenuation
+    +
+holder binding
+    +
+proof-of-possession
+    +
+request policy
+```
+
+This makes the resource server the enforcement point.
+
+---
+
+# 66. Separation of Security Responsibilities
+
+The project demonstrates several separate security questions.
+
+## Authentication / Signature Verification
+
+```text
+Who signed this token?
+```
+
+Answered using:
+
+```text
+Ed25519 signature verification
+```
+
+## Delegation
+
+```text
+Who delegated this authority?
+```
+
+Answered using:
+
+```text
+parent relationship
++
+parent holder key
+```
+
+## Attenuation
+
+```text
+Did the child gain more authority?
+```
+
+Answered using:
+
+```text
+capability comparison
+```
+
+## Holder Binding
+
+```text
+Who is this token intended for?
+```
+
+Answered using:
+
+```text
+cnf.jwk
+```
+
+## Proof-of-Possession
+
+```text
+Does the caller possess the corresponding private key?
+```
+
+Answered using:
+
+```text
 challenge
 +
 signature
 ```
 
-The resource server generates a new challenge.
+## Authorization
 
-The old signature does not verify against the new challenge.
-
-Therefore:
-
-```
-DENY
+```text
+Is this particular operation permitted?
 ```
 
-This is why the challenge must be unpredictable and preferably single-use.
+Answered using:
+
+```text
+policy evaluation
+```
+
+These checks should not be collapsed into a single decision.
 
 ---
 
-# 53. Attack: Skip Delegation
+# 67. Threat Model
 
-Suppose:
-
-```
-AAT₀
-  |
-  v
-AAT₁
-  |
-  v
-AAT₂
-```
-
-An attacker attempts to present AAT₂ without the expected parent chain.
-
-The verifier should reconstruct the chain and validate every link.
-
-A token should not be considered valid simply because its own JWT signature is valid.
-
-The delegation relationship matters.
-
----
-
-# 54. Attack: Exceed Delegation Depth
-
-The tokens contain:
-
-```
-del_depth
-del_max_depth
-```
+The proof of concept assumes that downstream participants may be compromised or malicious.
 
 For example:
 
-```
-AAT₀ = depth 0
-AAT₁ = depth 1
-AAT₂ = depth 2
-```
-
-If:
-
-```
-del_max_depth = 3
-```
-
-then additional delegation beyond the permitted depth should be rejected.
-
-This enforcement will be strengthened as the POC develops.
-
----
-
-# 55. Current Limitations
-
-This is a proof of concept and intentionally simplifies several areas.
-
-## Simplified constraint model
-
-The current implementation only supports simple equality and wildcard semantics.
-
-For example:
-
-```
-namespace=*
-```
-
-and:
-
-```
-namespace=payments
-```
-
-It does not yet implement a comprehensive constraint language.
-
----
-
-## Simplified parent reference
-
-The parent is currently represented by:
-
-```
-SHA-256(parent JWT)
-```
-
-This is useful for demonstrating the concept but should eventually be aligned more closely with the exact AAT specification semantics.
-
----
-
-## Local PEM keys
-
-Private keys currently exist as local PEM files.
-
-This is not appropriate for production.
-
----
-
-## No OAuth yet
-
-The current POC is deliberately independent of OAuth and Keycloak.
-
-OAuth/Keycloak integration is a later phase.
-
----
-
-## No real resource server yet
-
-The current authorization logic is being developed independently before introducing FastAPI.
-
----
-
-## No real LLM agent yet
-
-The current "agents" are Python programs.
-
-They represent the delegation model without introducing the additional complexity of an LLM.
-
----
-
-# 56. Threat Model
-
-The proof of concept assumes that some participants may be compromised or malicious.
-
-For example:
-
-```
+```text
 Root Issuer
      |
      v
@@ -2103,112 +2414,93 @@ The important question is:
 
 > What damage can a compromised downstream agent cause?
 
-The intended security property is:
+The intended answer is:
 
-```
-No more authority than it was delegated.
+```text
+No more than the authority that was delegated to it.
 ```
 
 If Agent B receives:
 
-```
+```text
 deploy(namespace=payments)
 ```
 
 it should not be able to create:
 
-```
+```text
 deploy(namespace=billing)
 ```
 
 or:
 
-```
+```text
 delete_cluster
 ```
 
 or:
 
-```
+```text
 read_cluster
 ```
 
-unless those capabilities were legitimately delegated to it.
+unless those capabilities were legitimately delegated.
 
 ---
 
-# 57. Why Attenuation Matters for Agents
+# 68. Why Attenuation Matters for Agents
 
-Agentic systems introduce a particularly interesting delegation problem.
+Without attenuation:
 
-An agent may decide:
-
-```
-"I need another agent to perform this task."
-```
-
-It may then delegate authority to another agent.
-
-Without attenuation, this creates a risk:
-
-```
+```text
 User
-  |
-  v
+ |
+ v
 Agent A
-  |
-  | full authority
-  v
+ |
+ | full user authority
+ v
 Agent B
-  |
-  | full authority
-  v
+ |
+ | full user authority
+ v
 Agent C
 ```
 
-Every agent effectively receives the same power.
+Every downstream component effectively inherits the same power.
 
 With attenuation:
 
-```
+```text
 User
-  |
-  | deploy(*)
-  v
+ |
+ | deploy(*)
+ | read_cluster
+ v
 Agent A
-  |
-  | deploy(payments)
-  v
+ |
+ | deploy(payments)
+ v
 Agent B
-  |
-  | deploy(payments, production)
-  v
+ |
+ | deploy(payments, production)
+ v
 Tool
 ```
 
-Authority narrows as the task becomes more specific.
+Authority becomes narrower as the task becomes more specific.
 
 ---
 
-# 58. Least Privilege
+# 69. Least Privilege
 
 The model naturally supports least privilege.
 
-Instead of giving Agent B:
-
-```
-everything the user can do
-```
-
-Agent A can give it only:
-
-```
-the specific authority required for its task
-```
+Instead of giving Agent B everything the user can do, Agent A gives Agent B only the authority required for its task.
 
 For example:
 
-```
+```text
 User:
     deploy anywhere
     read cluster
@@ -2223,378 +2515,423 @@ Tool:
     execute deployment
 ```
 
-This is much closer to the actual task being performed.
+This is much closer to the actual operation being performed.
 
 ---
 
-# 59. Separation of Authentication and Authorization
+# 70. Current Security Invariants
 
-The project demonstrates that several different questions must be answered.
+The implementation is intended to enforce invariants such as:
 
-### Authentication
+```text
+Invariant 1:
+A token must have a valid signature.
 
-Who signed this?
+Invariant 2:
+A child must be signed by the holder of its parent.
 
-```
-JWT signature
-```
+Invariant 3:
+A child must reference its actual parent.
 
-### Delegation
+Invariant 4:
+A child cannot have more authority than its parent.
 
-Who delegated this authority?
+Invariant 5:
+A token can only be exercised by its bound holder.
 
-```
-parent
-+
-signer
-```
+Invariant 6:
+Proof-of-possession must be tied to the challenge.
 
-### Attenuation
+Invariant 7:
+Expired tokens cannot be used.
 
-Is the delegated authority narrower than the parent's?
+Invariant 8:
+The requested action must be permitted by the final token.
 
-```
-capability comparison
-```
-
-### Holder binding
-
-Who is the token intended for?
-
-```
-cnf
+Invariant 9:
+The resource server makes the final authorization decision.
 ```
 
-### Proof of possession
+A further target invariant is:
 
-Does the caller actually possess the holder's private key?
-
-```
-challenge/response
-```
-
-### Authorization
-
-Can this specific request be performed?
-
-```
-policy evaluation
+```text
+Invariant 10:
+Delegation depth cannot exceed the permitted maximum.
 ```
 
-These should not be collapsed into one check.
+Full depth enforcement remains future work.
 
 ---
 
-# 60. Current Run Sequence
+# 71. Current Limitations
 
-After generating keys, the complete current flow is:
+This is a proof of concept and intentionally simplifies several areas.
 
-## 1. Generate keys
+## Simplified Constraint Model
 
-```
-PYTHONPATH=. python tests/generate_keys.py
-```
+The current implementation supports relatively simple wildcard and equality semantics.
 
-## 2. Issue AAT₀
+It is not a complete general-purpose authorization constraint language.
 
-```
-PYTHONPATH=. python issuer/issuer.py
-```
+## Fixed Chain Shape
 
-## 3. Agent A creates AAT₁
+The current implementation is built around:
 
-```
-PYTHONPATH=. python agents/agent_a.py
+```text
+AAT₀ → AAT₁ → AAT₂
 ```
 
-## 4. Agent B creates AAT₂
+A future implementation should support arbitrary chain lengths.
 
-```
-PYTHONPATH=. python agents/agent_b.py
-```
+## Delegation Depth
 
-## 5. Verify the chain
+`del_depth` and `del_max_depth` exist, but stronger enforcement remains to be implemented.
 
-```
-PYTHONPATH=. python tests/verify_chain.py
-```
+## Parent Reference
 
-## 6. Test proof-of-possession
+The parent is currently represented using:
 
-```
-PYTHONPATH=. python tests/test_pop.py
+```text
+SHA-256(parent JWT)
 ```
 
-## 7. Test token-bound proof-of-possession
+This is useful for demonstrating the concept but should eventually be reviewed against the exact semantics required by the AAT draft.
 
-```
-PYTHONPATH=. python tests/test_aat_pop.py
-```
+## Local PEM Keys
 
-Additional policy and attack tests will be added as the implementation progresses.
+Private keys currently exist as local PEM files.
+
+This is not appropriate for production.
+
+## Static Chain Files
+
+Earlier tokens are currently stored locally and loaded by the resource server.
+
+A real distributed system requires a better chain transport/resolution mechanism.
+
+## Challenge State
+
+The current challenge mechanism demonstrates proof binding and freshness information.
+
+A production implementation should track challenge issuance and consumption server-side to guarantee single-use behaviour.
+
+## No OAuth Yet
+
+The current POC deliberately implements the core delegation mechanics before adding OAuth.
+
+## No Keycloak Yet
+
+Keycloak integration is a later phase.
+
+## No Real LLM Agent Yet
+
+The current agents are Python programs.
+
+## No Real Cluster Deployment Yet
+
+The `/deploy` endpoint currently simulates successful deployment.
 
 ---
 
-# 61. Complete End-to-End Flow
+# 72. Why OAuth and Keycloak Come Later
 
-The complete conceptual flow is:
+The project deliberately separates:
 
-```
-                   USER
-                    |
-                    |
-                    v
-              Root Issuer
-                    |
-                    | AAT₀
-                    | deploy(*)
-                    | read_cluster
-                    v
-                Agent A
-                    |
-                    | AAT₁
-                    | deploy(payments)
-                    v
-                Agent B
-                    |
-                    | AAT₂
-                    | deploy(payments,
-                    |        production)
-                    v
-               Tool Agent
-                    |
-                    | PoP
-                    v
-             Resource Server
-                    |
-                    | verify chain
-                    | verify PoP
-                    | evaluate policy
-                    v
-              ALLOW / DENY
-```
-
----
-
-# 62. Future FastAPI Resource Server
-
-The next major stage is to introduce a real HTTP resource server.
-
-For example:
-
-```
-POST /deploy
-```
-
-with:
-
-```
-{
-  "namespace": "payments",
-  "environment": "production"
-}
-```
-
-The request could contain:
-
-```
-Authorization: Bearer <AAT₂>
-```
-
-plus a proof-of-possession mechanism.
-
-The resource server would then:
-
-1. Parse token
-2. Verify JWT
-3. Build delegation chain
-4. Verify parent relationships
-5. Verify attenuation
-6. Check expiry
-7. Extract `cnf`
-8. Verify proof-of-possession
-9. Evaluate requested action
-10. Return ALLOW/DENY
-
----
-
-# 63. Future OAuth Integration
-
-Once the core cryptographic model is understood, the next step is to introduce OAuth.
-
-The eventual architecture could become:
-
-```
-User
-  |
-  v
-OAuth Authorization Server
-  |
-  | AAT₀
-  v
-Agent A
-  |
-  | AAT₁
-  v
-Agent B
-  |
-  | AAT₂
-  v
-Resource Server
-```
-
-The POC will then explore how the AAT concepts fit into a conventional OAuth deployment.
-
----
-
-# 64. Future Keycloak Integration
-
-Keycloak is deliberately not the first component being used.
-
-The reason is to separate two problems:
-
-```
-AAT cryptographic model
+```text
+AAT cryptographic/delegation model
 ```
 
 from:
 
-```
-Identity Provider / OAuth implementation
-```
-
-Once the core model is understood, Keycloak can provide the identity and OAuth infrastructure around it.
-
-The eventual setup could include:
-
-```
-                   Keycloak
-                       |
-                       |
-                  OAuth tokens
-                       |
-                       v
-                    Agent A
-                       |
-                     AAT₁
-                       |
-                       v
-                    Agent B
-                       |
-                     AAT₂
-                       |
-                       v
-                  Resource API
+```text
+OAuth / Identity Provider infrastructure
 ```
 
-Potential areas to investigate include:
+The current system makes it possible to understand:
 
-* Keycloak clients
-* OAuth token exchange
-* JWT signing
-* Custom claims
-* Token mappers
-* Authorization services
-* Client authentication
-* Proof-of-possession
-* Sender-constrained tokens
-* Custom protocol extensions
+```text
+signatures
++
+delegation
++
+attenuation
++
+holder binding
++
+proof-of-possession
++
+authorization
+```
+
+before introducing the additional complexity of:
+
+```text
+OAuth clients
+authorization grants
+token exchange
+Keycloak realms
+client authentication
+protocol mappers
+JWKS
+OAuth access tokens
+```
 
 ---
 
-# 65. Future Real Agentic Workflow
+# 73. Future OAuth Integration
 
-After the cryptographic and HTTP components are working, the Python "agents" can be replaced or augmented with actual agent workflows.
+The eventual architecture could become:
+
+```text
+User
+ |
+ v
+OAuth Authorization Server
+ |
+ | Root authorization
+ v
+Agent A
+ |
+ | attenuated delegation
+ v
+Agent B
+ |
+ | attenuated delegation
+ v
+Resource Server
+```
+
+Areas to investigate include:
+
+- OAuth access tokens
+- Rich Authorization Requests
+- Token exchange
+- Sender-constrained tokens
+- Proof-of-possession
+- Agent delegation
+- Resource indicators
+- Audience restrictions
+
+---
+
+# 74. Future Keycloak Integration
+
+Keycloak can eventually provide the OAuth and identity infrastructure around the AAT model.
+
+Potential architecture:
+
+```text
+                   Keycloak
+                      |
+                      | OAuth
+                      v
+                   Agent A
+                      |
+                      | AAT₁
+                      v
+                   Agent B
+                      |
+                      | AAT₂
+                      v
+                Resource API
+```
+
+Potential areas to investigate:
+
+- Keycloak clients
+- OAuth token exchange
+- JWT signing
+- Custom claims
+- Protocol mappers
+- Authorization services
+- Client authentication
+- JWKS
+- Sender-constrained tokens
+- Custom protocol extensions
+
+---
+
+# 75. Future Real Agent Workflow
+
+The current `agent_a.py` and `agent_b.py` scripts conceptually represent agents.
+
+A future stage could turn them into actual services.
 
 For example:
 
-```
+```text
 User:
     "Deploy the payments application."
-
         |
         v
-
 Agent A:
     determines deployment is required
-
         |
-        | delegates restricted authority
+        | delegates:
+        | deploy(namespace=payments)
         v
-
 Agent B:
     deployment specialist
-
         |
-        | delegates restricted authority
+        | delegates:
+        | deploy(
+        |   namespace=payments,
+        |   environment=production
+        | )
         v
-
-Deployment Tool:
-    performs actual deployment
-
+Deployment Tool
         |
         v
-
-Kubernetes / OpenShift
+Resource Server
 ```
 
-The important point is that the agents do not simply pass around an unrestricted user credential.
-
-Instead, each delegation produces a more narrowly scoped authorization artifact.
+Each delegation creates a new, more narrowly scoped authorization artifact.
 
 ---
 
-# 66. Potential OpenShift Example
+# 76. Future LLM Agent
 
-A useful future test case is an OpenShift deployment.
+An LLM can eventually be introduced into the agent chain.
 
-The root authority might conceptually allow:
+For example:
 
+```text
+User
+ |
+ v
+LLM Planning Agent
+ |
+ | attenuated AAT
+ v
+Execution Agent
+ |
+ | attenuated AAT
+ v
+Deployment Tool
 ```
+
+The important principle is:
+
+> The LLM should not be the authorization enforcement point.
+
+The LLM may decide:
+
+```text
+"I want to deploy this application."
+```
+
+But the resource server independently decides:
+
+```text
+"Is this request actually authorized?"
+```
+
+This keeps security enforcement outside the probabilistic agent.
+
+---
+
+# 77. Future OpenShift/Kubernetes Integration
+
+A useful real-world target is Kubernetes or OpenShift.
+
+The root authority might allow:
+
+```text
 deploy(namespace=*)
 ```
 
 Agent A delegates:
 
-```
+```text
 deploy(namespace=payments)
 ```
 
 Agent B delegates:
 
-```
+```text
 deploy(
     namespace=payments,
     environment=production
 )
 ```
 
-The resource server could then map this to an actual OpenShift action.
+The resource server could then map the authorization to a real cluster operation.
 
 For example:
 
-```
+```text
 POST /api/deploy
 ```
 
-with:
-
-```
-{
-  "namespace": "payments",
-  "environment": "production"
-}
-```
-
-The authorization layer verifies that the request is within the delegated authority before interacting with the cluster.
+The resource server would verify the AAT chain before interacting with the Kubernetes/OpenShift API.
 
 ---
 
-# 67. Future Security Tests
+# 78. Potential Final Architecture
 
-The attack test suite should eventually automate tests such as:
+The eventual target could look like:
 
+```text
+                         USER
+                          |
+                          v
+                       KEYCLOAK
+                          |
+                          | OAuth authorization
+                          v
+                    LLM / AGENT A
+                          |
+                          | AAT₁
+                          | attenuated authority
+                          v
+                       AGENT B
+                          |
+                          | AAT₂
+                          | further attenuation
+                          v
+                     TOOL AGENT
+                          |
+                          | proof-of-possession
+                          v
+                AAT RESOURCE SERVER
+                          |
+                          | verify chain
+                          | verify attenuation
+                          | verify PoP
+                          | evaluate policy
+                          v
+                KUBERNETES / OPENSHIFT
 ```
+
+---
+
+# 79. Future Security Hardening
+
+Important future security work includes:
+
+- Enforce delegation depth.
+- Generalize chain verification to arbitrary depth.
+- Improve constraint semantics.
+- Add stronger replay protection.
+- Track challenge issuance and consumption.
+- Add `kid` support.
+- Add JWKS support.
+- Add key rotation.
+- Add revocation.
+- Improve issuer/audience validation.
+- Improve token validation rules.
+- Remove reliance on local token files.
+- Replace PEM private keys with protected key storage.
+- Add structured security logging.
+- Add more negative HTTP tests.
+
+---
+
+# 80. Future Security Tests
+
+The test suite should eventually include:
+
+```text
 test_valid_chain()
 
 test_modified_root_token()
@@ -2621,6 +2958,10 @@ test_invalid_pop()
 
 test_replayed_pop()
 
+test_reused_challenge()
+
+test_expired_challenge()
+
 test_expired_token()
 
 test_delegation_depth()
@@ -2628,259 +2969,603 @@ test_delegation_depth()
 test_skipped_parent()
 
 test_unknown_tool()
+
+test_wrong_issuer()
+
+test_wrong_audience()
 ```
 
-The objective is to turn the security properties into executable tests.
+The objective is to turn each security property into an executable regression test.
 
 ---
 
-# 68. Desired Security Invariants
+# 81. Current Implementation Checklist
 
-The final implementation should enforce invariants such as:
+## Core Cryptography
 
-```
-Invariant 1:
-A token must have a valid signature.
+- [x] Ed25519 key generation
+- [x] Private/public key loading
+- [x] JWT signing
+- [x] JWT verification
+- [x] Public-key JWK representation
 
-Invariant 2:
-A child must be signed by the holder of its parent.
+## AAT
 
-Invariant 3:
-A child must reference its actual parent.
+- [x] Root AAT
+- [x] Holder binding
+- [x] Authorization details
+- [x] Parent token hash
+- [x] Agent A child token
+- [x] Agent B child token
+- [x] Delegation chain
+- [x] Capability attenuation
 
-Invariant 4:
-A child cannot have more authority than its parent.
+## Verification
 
-Invariant 5:
-A token can only be used by its bound holder.
+- [x] Root signature verification
+- [x] Child signature verification
+- [x] Parent-reference verification
+- [x] Capability attenuation verification
+- [x] Token expiry verification
+- [x] Complete AAT₀ → AAT₁ → AAT₂ verification
 
-Invariant 6:
-Proof-of-possession must be tied to a fresh challenge.
+## Proof-of-Possession
 
-Invariant 7:
-Expired tokens cannot be used.
+- [x] Challenge generation
+- [x] Challenge encoding
+- [x] Challenge decoding
+- [x] Challenge signing
+- [x] Signature verification
+- [x] Token-bound holder verification
+- [x] Wrong-key rejection
+- [x] Different-challenge rejection
+- [x] HTTP challenge/proof flow
 
-Invariant 8:
-Delegation depth cannot exceed the permitted maximum.
+## Authorization
 
-Invariant 9:
-The requested action must be allowed by the final token.
+- [x] Capability lookup
+- [x] Constraint checking
+- [x] Authorization decision layer
+- [x] Resource-server enforcement
 
-Invariant 10:
-The resource server makes the final authorization decision.
-```
+## HTTP
 
----
+- [x] FastAPI resource server
+- [x] `/challenge`
+- [x] `/deploy`
+- [x] Bearer AAT handling
+- [x] Challenge transport
+- [x] PoP transport
+- [x] End-to-end HTTP client
+- [x] Successful authorized deployment response
 
-# 69. Current Status
+## Security Tests
 
-The proof of concept currently demonstrates:
-
-* [x] Python project structure
-* [x] Ed25519 key generation
-* [x] JWT creation
-* [x] Root authorization token
-* [x] Holder public-key binding
-* [x] Agent A delegation
-* [x] Agent B delegation
-* [x] Parent token hashing
-* [x] Capability attenuation
-* [x] Delegation-chain verification
-* [x] Proof-of-possession
-* [x] Token-bound proof-of-possession
-* [x] Basic authorization policy concepts
-
-Next stages:
-
-* [ ] Complete authorization decision layer
-* [ ] Build FastAPI resource server
-* [ ] Implement HTTP-based PoP
-* [ ] Build automated attack tests
-* [ ] Enforce delegation depth
-* [ ] Improve constraint semantics
-* [ ] Improve token/chain validation structure
-* [ ] Integrate OAuth
-* [ ] Integrate Keycloak
-* [ ] Explore token exchange
-* [ ] Introduce real agent workflows
-* [ ] Introduce an LLM-based agent
-* [ ] Integrate with a real tool/API
-* [ ] Integrate with OpenShift/Kubernetes
+- [x] JWT tampering
+- [x] Capability escalation
+- [x] Constraint broadening
+- [x] Parent substitution
+- [x] Wrong child signing key
+- [x] Wrong PoP key
+- [x] Proof against different challenge
 
 ---
 
-# 70. Roadmap
+# 82. Remaining Work
 
-The intended development sequence is:
+- [ ] Enforce delegation depth
+- [ ] Support arbitrary delegation-chain length
+- [ ] Improve constraint semantics
+- [ ] Improve token validation structure
+- [ ] Improve verification API naming
+- [ ] Add server-side single-use challenge state
+- [ ] Add replay cache
+- [ ] Add key IDs (`kid`)
+- [ ] Add JWKS
+- [ ] Add key rotation
+- [ ] Add revocation
+- [ ] Add audience validation
+- [ ] Replace static token files
+- [ ] Replace local private-key storage
+- [ ] OAuth integration
+- [ ] Keycloak integration
+- [ ] OAuth token exchange
+- [ ] Real agent services
+- [ ] LLM agent
+- [ ] Real tool/API integration
+- [ ] Kubernetes integration
+- [ ] OpenShift integration
 
-```
+---
+
+# 83. Roadmap
+
+The project has progressed through the following phases:
+
+```text
 Phase 1
 Basic signed token
-        |
-        v
+    |
+    v
+COMPLETE
+
 Phase 2
 Capabilities
-        |
-        v
+    |
+    v
+COMPLETE
+
 Phase 3
 Attenuation
-        |
-        v
+    |
+    v
+COMPLETE
+
 Phase 4
 Delegation chain
-        |
-        v
+    |
+    v
+COMPLETE
+
 Phase 5
 Offline chain verification
-        |
-        v
+    |
+    v
+COMPLETE
+
 Phase 6
-Proof of possession
-        |
-        v
+Proof-of-possession
+    |
+    v
+COMPLETE
+
 Phase 7
-Argument constraints
-        |
-        v
+Authorization policy
+    |
+    v
+COMPLETE
+
 Phase 8
 Attack/security tests
-        |
-        v
+    |
+    v
+COMPLETE
+
 Phase 9
 FastAPI resource server
-        |
-        v
+    |
+    v
+COMPLETE
+
 Phase 10
-OAuth integration
-        |
-        v
+HTTP proof-of-possession
+    |
+    v
+COMPLETE
+
 Phase 11
-Keycloak integration
-        |
-        v
+End-to-end HTTP authorization
+    |
+    v
+COMPLETE
+
 Phase 12
-Real agentic workflow
-        |
-        v
+Security hardening
+    |
+    v
+NEXT
+
 Phase 13
-LLM + tools + OpenShift
+OAuth integration
+    |
+    v
+PLANNED
+
+Phase 14
+Keycloak integration
+    |
+    v
+PLANNED
+
+Phase 15
+Real agent workflow
+    |
+    v
+PLANNED
+
+Phase 16
+LLM agent
+    |
+    v
+PLANNED
+
+Phase 17
+Real tool / OpenShift integration
 ```
 
 ---
 
-# 71. What This POC Is Intended to Demonstrate
+# 84. What the POC Currently Demonstrates
 
-At the end of the project, the desired demonstration is something like:
+The project can now demonstrate:
 
-```
-User
-  |
-  | "Deploy payments application"
-  |
-  v
-Agent A
-  |
-  | receives broad authorization
-  |
-  | delegates:
-  | deploy(namespace=payments)
-  v
-Agent B
-  |
-  | delegates:
-  | deploy(namespace=payments,
-  |        environment=production)
-  v
-Tool Agent
-  |
-  | proves possession of bound key
-  v
-Resource Server
-  |
-  | verifies complete AAT chain
-  |
-  | verifies attenuation
-  |
-  | verifies proof-of-possession
-  |
-  | evaluates request
-  v
-OpenShift / Kubernetes
+```text
+1. A root issuer grants broad authority.
+
+2. Agent A receives that authority.
+
+3. Agent A delegates less authority to Agent B.
+
+4. Agent B delegates even less authority to a Tool Agent.
+
+5. Every token is cryptographically signed.
+
+6. Every child references its parent.
+
+7. Every child is verified against its parent's holder key.
+
+8. Every delegation is checked for attenuation.
+
+9. The final token is bound to the Tool Agent's public key.
+
+10. The Tool Agent obtains a fresh challenge.
+
+11. The Tool Agent signs the challenge.
+
+12. The resource server verifies possession of the bound private key.
+
+13. The resource server evaluates the requested operation.
+
+14. A valid deployment request is allowed.
+
+15. Tampering and privilege-expansion attempts are rejected.
 ```
 
-If an attacker attempts:
+---
 
+# 85. Example Security Story
+
+The user starts with:
+
+```text
+deploy(namespace=*)
+read_cluster
 ```
+
+Agent A receives:
+
+```text
+deploy(namespace=*)
+read_cluster
+```
+
+but delegates only:
+
+```text
+deploy(namespace=payments)
+```
+
+Agent B receives that authority and delegates:
+
+```text
+deploy(
+    namespace=payments,
+    environment=production
+)
+```
+
+The Tool Agent requests:
+
+```text
+deploy(
+    namespace=payments,
+    environment=production
+)
+```
+
+and proves possession of the private key bound to AAT₂.
+
+Result:
+
+```text
+ALLOW
+```
+
+If it requests:
+
+```text
 deploy(namespace=billing)
 ```
 
-the request is rejected.
+result:
 
-If an attacker attempts:
-
-```
-delete_cluster
-```
-
-the request is rejected.
-
-If an attacker copies AAT₂ but does not possess the Tool Agent private key:
-
-```
+```text
 DENY
 ```
 
-If an attacker modifies the token:
+If it requests:
 
+```text
+read_cluster
 ```
+
+result:
+
+```text
 DENY
 ```
 
-If an attacker attempts to broaden a delegated capability:
+If it modifies AAT₂:
 
-```
+```text
 DENY
 ```
 
-This is the core security story the proof of concept is intended to demonstrate.
+If it presents a proof signed by the wrong private key:
+
+```text
+DENY
+```
+
+If it attempts to broaden:
+
+```text
+namespace=payments
+```
+
+to:
+
+```text
+namespace=*
+```
+
+result:
+
+```text
+DENY
+```
 
 ---
 
-# 72. Disclaimer
+# 86. Key Lessons
+
+Several important ideas have emerged from the POC.
+
+## Delegation Is Not Token Forwarding
+
+A downstream agent should not simply receive the original user's credential.
+
+Instead it should receive a deliberately restricted authorization.
+
+## Signatures Are Not Enough
+
+A valid JWT signature only proves that a particular key signed a token.
+
+The verifier must also establish:
+
+```text
+Was that key authorized to create this child?
+```
+
+That is why parent holder binding matters.
+
+## Parent Relationships Matter
+
+A child must be tied to the exact authorization from which it was derived.
+
+## Attenuation Is the Core Authorization Property
+
+Every delegation must satisfy:
+
+```text
+child <= parent
+```
+
+## Holder Binding Reduces Bearer-Token Risk
+
+Possession of AAT₂ alone should not be enough.
+
+The caller must also possess the private key corresponding to:
+
+```text
+AAT₂.cnf.jwk
+```
+
+## PoP and Authorization Are Different
+
+Proof-of-possession establishes:
+
+```text
+You possess the correct private key.
+```
+
+It does not establish:
+
+```text
+You are allowed to deploy to billing.
+```
+
+That is the policy layer's job.
+
+## The Resource Server Is the Enforcement Point
+
+Agents can request actions.
+
+They do not make the final security decision.
+
+---
+
+# 87. Design Philosophy
+
+The project intentionally follows this progression:
+
+```text
+Cryptography
+     |
+     v
+Signed Tokens
+     |
+     v
+Capabilities
+     |
+     v
+Attenuation
+     |
+     v
+Delegation Chain
+     |
+     v
+Holder Binding
+     |
+     v
+Proof-of-Possession
+     |
+     v
+Authorization Policy
+     |
+     v
+HTTP Resource Server
+     |
+     v
+Security Hardening
+     |
+     v
+OAuth
+     |
+     v
+Keycloak
+     |
+     v
+Real Agents
+     |
+     v
+LLM Agents
+     |
+     v
+Real Tools
+     |
+     v
+OpenShift / Kubernetes
+```
+
+Each layer is added only after the previous layer can be demonstrated independently.
+
+---
+
+# 88. Quick Start
+
+Clone or enter the repository:
+
+```bash
+cd ~/workspace/aat-poc
+```
+
+Activate the virtual environment:
+
+```bash
+source .venv/bin/activate
+```
+
+Install dependencies if required:
+
+```bash
+pip install -r requirements.txt
+```
+
+Generate keys:
+
+```bash
+PYTHONPATH=. python tests/generate_keys.py
+```
+
+Generate the chain:
+
+```bash
+PYTHONPATH=. python issuer/issuer.py
+PYTHONPATH=. python agents/agent_a.py
+PYTHONPATH=. python agents/agent_b.py
+```
+
+Verify it:
+
+```bash
+PYTHONPATH=. python tests/verify_chain.py
+```
+
+Run security tests:
+
+```bash
+PYTHONPATH=. python tests/test_attacks.py
+```
+
+Start the resource server:
+
+```bash
+PYTHONPATH=. uvicorn server.server:app --host 0.0.0.0 --port 8000
+```
+
+Open another terminal:
+
+```bash
+cd ~/workspace/aat-poc
+source .venv/bin/activate
+```
+
+Run the HTTP client:
+
+```bash
+PYTHONPATH=. python tests/client.py
+```
+
+Expected final response:
+
+```text
+SERVER RESPONSE
+================================================================================
+200
+{"status":"deployed","namespace":"payments","environment":"production"}
+```
+
+---
+
+# 89. Disclaimer
 
 This project is an educational proof of concept.
 
 It is intended to explore the concepts behind attenuating authorization and agentic delegation.
 
-It is not currently a production-ready authorization system.
+It is **not a production-ready authorization system**.
 
-In particular, the current implementation contains deliberately simplified:
+In particular, the current implementation deliberately simplifies:
 
-* Constraint semantics
-* Parent references
-* Key storage
-* Proof-of-possession
-* Token validation
-* Delegation-depth enforcement
-* OAuth integration
-* Resource-server implementation
+- Constraint semantics
+- Chain discovery
+- Parent references
+- Key storage
+- Challenge management
+- Replay prevention
+- Delegation-depth enforcement
+- Key rotation
+- Revocation
+- OAuth integration
+- Resource-server deployment behaviour
 
-Before using any of these mechanisms in a production environment, they should be reviewed against the relevant standards and security requirements.
+Any production implementation would require substantial additional design, standards review, threat modelling and security testing.
 
 ---
 
-# 73. Summary
+# 90. Summary
 
 The central idea of this project can be reduced to one principle:
 
-```
-Delegation must never create more authority than the
-delegator already possesses.
+```text
+Delegation must never create more authority
+than the delegator already possesses.
 ```
 
 The chain:
 
-```
+```text
 AAT₀
   |
   | attenuation
@@ -2894,7 +3579,7 @@ AAT₂
 
 must always satisfy:
 
-```
+```text
 Capabilities(AAT₂)
     ⊆
 Capabilities(AAT₁)
@@ -2902,9 +3587,9 @@ Capabilities(AAT₁)
 Capabilities(AAT₀)
 ```
 
-Combined with:
+The current POC combines:
 
-```
+```text
 Cryptographic signatures
         +
 Parent references
@@ -2913,35 +3598,70 @@ Capability attenuation
         +
 Holder binding
         +
-Proof of possession
+Proof-of-possession
         +
 Request authorization
+        +
+HTTP resource-server enforcement
 ```
 
-this provides a foundation for exploring secure delegation in multi-agent systems.
+The project has now progressed from offline token experiments to a working end-to-end HTTP demonstration:
 
-The eventual objective is to move from this local Python demonstration to:
-
+```text
+Root Issuer
+     |
+     | AAT₀
+     v
+Agent A
+     |
+     | attenuate
+     | AAT₁
+     v
+Agent B
+     |
+     | attenuate
+     | AAT₂
+     v
+Tool Agent
+     |
+     | request challenge
+     | prove possession
+     v
+FastAPI Resource Server
+     |
+     | verify complete chain
+     | verify attenuation
+     | verify PoP
+     | evaluate policy
+     v
+ALLOW / DENY
 ```
+
+The next major phase is to harden the current security model before introducing OAuth and Keycloak.
+
+The eventual objective is:
+
+```text
 OAuth
-  +
+   +
 Keycloak
-  +
-Agent delegation
-  +
-Proof of possession
-  +
+   +
+Attenuating Agent Tokens
+   +
+Agent Delegation
+   +
+Proof-of-Possession
+   +
+LLM Agents
+   +
 Resource APIs
-  +
-LLM agents
-  +
-OpenShift/Kubernetes
+   +
+OpenShift / Kubernetes
 ```
 
-while preserving the same fundamental security invariant:
+while preserving the fundamental invariant:
 
+```text
+A delegated agent can only act within
+the authority that was delegated to it.
 ```
-A delegated agent can only act within the authority
-that was delegated to it.
-```
-
