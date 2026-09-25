@@ -10,13 +10,25 @@ def load_token(filename):
 
 def main():
 
-    aat0 = load_token("aat0.jwt")
-    aat1 = load_token("aat1.jwt")
-    aat2 = load_token("aat2.jwt")
+    # ---------------------------------------------------------
+    # Load complete delegation chain
+    # ---------------------------------------------------------
+
+    tokens = [
+        load_token("aat0.jwt"),
+        load_token("aat1.jwt"),
+        load_token("aat2.jwt"),
+    ]
+
+    # ---------------------------------------------------------
+    # Create proof-of-possession
+    # ---------------------------------------------------------
 
     challenge = create_challenge()
 
-    tool_agent_private_key = load_private_key("tool-agent")
+    tool_agent_private_key = load_private_key(
+        "tool-agent"
+    )
 
     proof = sign_challenge(
         tool_agent_private_key,
@@ -27,10 +39,12 @@ def main():
     print("FULL AUTHORISATION TEST")
     print("=" * 80)
 
+    # ---------------------------------------------------------
+    # Valid request
+    # ---------------------------------------------------------
+
     allowed = authorize(
-        aat0,
-        aat1,
-        aat2,
+        tokens,
         challenge,
         proof,
         "deploy",
@@ -40,12 +54,19 @@ def main():
         },
     )
 
-    print("VALID REQUEST:", allowed)
+    print(
+        "VALID REQUEST:",
+        allowed,
+    )
+
+    # ---------------------------------------------------------
+    # Invalid request
+    #
+    # Final token only allows namespace=payments.
+    # ---------------------------------------------------------
 
     denied = authorize(
-        aat0,
-        aat1,
-        aat2,
+        tokens,
         challenge,
         proof,
         "deploy",
@@ -55,7 +76,10 @@ def main():
         },
     )
 
-    print("WRONG NAMESPACE:", denied)
+    print(
+        "WRONG NAMESPACE:",
+        denied,
+    )
 
 
 if __name__ == "__main__":

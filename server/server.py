@@ -3,11 +3,17 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from aat.pop import create_challenge, decode_challenge, encode_challenge
+from aat.pop import (
+    create_challenge,
+    decode_challenge,
+    encode_challenge,
+)
 from authz.decision import authorize
 
 
-app = FastAPI(title="AAT Resource Server")
+app = FastAPI(
+    title="AAT Resource Server"
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -36,14 +42,26 @@ def health():
 def challenge():
     """
     Generate a challenge that the token holder
-    must sign to prove possession of the
-    private key bound to the AAT.
+    must sign to prove possession of the private
+    key bound to the final AAT.
+
+    NOTE:
+
+    At this stage of the POC the challenge is
+    cryptographically verified, but the server
+    does not yet maintain server-side state to
+    guarantee single-use.
+
+    Single-use challenge tracking is the next
+    security improvement.
     """
 
     challenge = create_challenge()
 
     return {
-        "challenge": encode_challenge(challenge),
+        "challenge": encode_challenge(
+            challenge
+        ),
         "expires_in": 300,
     }
 
@@ -52,9 +70,17 @@ def challenge():
 def deploy(
     request: DeployRequest,
     http_request: Request,
-    authorization: str | None = Header(default=None),
-    x_aat_challenge: str | None = Header(default=None),
+    authorization: str | None = Header(
+        default=None
+    ),
+    x_aat_challenge: str | None = Header(
+        default=None
+    ),
 ):
+    # ---------------------------------------------------------
+    # Authorization token
+    # ---------------------------------------------------------
+
     if not authorization:
         raise HTTPException(
             status_code=401,
@@ -67,13 +93,23 @@ def deploy(
             detail="Invalid Authorization header",
         )
 
+    # ---------------------------------------------------------
+    # Challenge
+    # ---------------------------------------------------------
+
     if not x_aat_challenge:
         raise HTTPException(
             status_code=401,
             detail="Missing X-AAT-Challenge header",
         )
 
-    proof = http_request.headers.get("X-AAT-Proof")
+    # ---------------------------------------------------------
+    # Proof-of-possession signature
+    # ---------------------------------------------------------
+
+    proof = http_request.headers.get(
+        "X-AAT-Proof"
+    )
 
     if not proof:
         raise HTTPException(
@@ -81,7 +117,15 @@ def deploy(
             detail="Missing X-AAT-Proof header",
         )
 
-    token = authorization[7:]
+    # ---------------------------------------------------------
+    # Final delegated token supplied by caller
+    # ---------------------------------------------------------
+
+    final_token = authorization[7:]
+
+    # ---------------------------------------------------------
+    # Decode challenge
+    # ---------------------------------------------------------
 
     try:
         challenge = decode_challenge(
@@ -94,14 +138,32 @@ def deploy(
             detail="Invalid challenge",
         )
 
-    aat0 = load_token("aat0.jwt")
-    aat1 = load_token("aat1.jwt")
+    # ---------------------------------------------------------
+    # Build delegation chain
+    #
+    # For the current POC:
+    #
+    # AAT₀ and AAT₁ are known locally by the resource server.
+    #
+    # The caller supplies the final delegated token.
+    #
+    # Later we can improve this so the complete chain is
+    # supplied or reconstructed dynamically.
+    # ---------------------------------------------------------
+
+    tokens = [
+        load_token("aat0.jwt"),
+        load_token("aat1.jwt"),
+        final_token,
+    ]
+
+    # ---------------------------------------------------------
+    # Complete authorization
+    # ---------------------------------------------------------
 
     try:
         allowed = authorize(
-            aat0,
-            aat1,
-            token,
+            tokens,
             challenge,
             proof,
             "deploy",
@@ -114,14 +176,25 @@ def deploy(
     except Exception as exc:
         raise HTTPException(
             status_code=401,
-            detail=f"Token verification failed: {exc}",
+            detail=(
+                "Token verification failed: "
+                f"{exc}"
+            ),
         )
+
+    # ---------------------------------------------------------
+    # Valid token but insufficient authority
+    # ---------------------------------------------------------
 
     if not allowed:
         raise HTTPException(
             status_code=403,
             detail="Request not authorised",
         )
+
+    # ---------------------------------------------------------
+    # Authorized operation
+    # ---------------------------------------------------------
 
     return {
         "status": "deployed",

@@ -5,9 +5,7 @@ from authz.policy import is_request_allowed
 
 
 def authorize(
-    aat0_token,
-    aat1_token,
-    aat2_token,
+    tokens,
     challenge,
     proof,
     action,
@@ -17,32 +15,81 @@ def authorize(
     Perform complete authorization.
 
     1. Verify the complete AAT delegation chain.
-    2. Verify proof-of-possession for the final token.
-    3. Check the requested action against the final token.
+    2. Select the final verified token.
+    3. Verify proof-of-possession for the final token.
+    4. Check the requested action against the final token.
+
+    The authorization layer does not assume a fixed
+    number of delegation levels.
     """
 
-    issuer_public_key = load_public_key("issuer")
+    # ---------------------------------------------------------
+    # Basic validation
+    # ---------------------------------------------------------
 
-    (
-        aat0_payload,
-        aat1_payload,
-        aat2_payload,
-    ) = verify_chain(
-        aat0_token,
-        aat1_token,
-        aat2_token,
+    if not isinstance(tokens, (list, tuple)):
+        raise ValueError(
+            "Token chain must be a list or tuple"
+        )
+
+    if len(tokens) == 0:
+        raise ValueError(
+            "Token chain cannot be empty"
+        )
+
+    # ---------------------------------------------------------
+    # Load trusted root issuer key
+    # ---------------------------------------------------------
+
+    issuer_public_key = load_public_key(
+        "issuer"
+    )
+
+    # ---------------------------------------------------------
+    # Verify complete delegation chain
+    # ---------------------------------------------------------
+
+    payloads = verify_chain(
+        tokens,
         issuer_public_key,
     )
 
+    # ---------------------------------------------------------
+    # Authorization is based on the final delegated token.
+    #
+    # This could be:
+    #
+    # AAT₀
+    #
+    # AAT₀ -> AAT₁
+    #
+    # AAT₀ -> AAT₁ -> AAT₂
+    #
+    # AAT₀ -> ... -> AATₙ
+    # ---------------------------------------------------------
+
+    final_payload = payloads[-1]
+
+    # ---------------------------------------------------------
+    # Verify proof-of-possession
+    #
+    # The caller must prove possession of the private key
+    # corresponding to the public key in final_payload.cnf.
+    # ---------------------------------------------------------
+
     if not verify_token_proof(
-        aat2_payload,
+        final_payload,
         challenge,
         proof,
     ):
         return False
 
+    # ---------------------------------------------------------
+    # Evaluate requested action against final authority
+    # ---------------------------------------------------------
+
     return is_request_allowed(
-        aat2_payload,
+        final_payload,
         action,
         constraints,
     )

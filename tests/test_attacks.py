@@ -78,9 +78,11 @@ def main():
         )
 
         verify_chain(
-            aat0,
-            aat1,
-            tampered,
+            [
+                aat0,
+                aat1,
+                tampered,
+            ],
             issuer_public_key,
         )
 

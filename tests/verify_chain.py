@@ -4,60 +4,67 @@ from aat.keys import load_public_key
 from aat.verify import verify_chain
 
 
+def load_token(filename):
+    with open(filename) as f:
+        return f.read().strip()
+
+
 def main():
 
     # ---------------------------------------------------------
-    # Load tokens
+    # Load token chain
     # ---------------------------------------------------------
 
-    with open("aat0.jwt") as f:
-        aat0 = f.read().strip()
-
-    with open("aat1.jwt") as f:
-        aat1 = f.read().strip()
-
-    with open("aat2.jwt") as f:
-        aat2 = f.read().strip()
+    tokens = [
+        load_token("aat0.jwt"),
+        load_token("aat1.jwt"),
+        load_token("aat2.jwt"),
+    ]
 
     # ---------------------------------------------------------
     # Root issuer public key
     # ---------------------------------------------------------
 
-    issuer_public_key = load_public_key("issuer")
+    issuer_public_key = load_public_key(
+        "issuer"
+    )
 
     # ---------------------------------------------------------
     # Verify complete chain
     # ---------------------------------------------------------
 
-    (
-        aat0_payload,
-        aat1_payload,
-        aat2_payload,
-    ) = verify_chain(
-        aat0,
-        aat1,
-        aat2,
+    payloads = verify_chain(
+        tokens,
         issuer_public_key,
     )
 
     # ---------------------------------------------------------
-    # Display results
+    # Display verified tokens
     # ---------------------------------------------------------
 
-    print()
-    print("AAT₀ VERIFIED")
-    print("=" * 80)
-    print(json.dumps(aat0_payload, indent=2))
+    for index, payload in enumerate(payloads):
+
+        print()
+
+        print(
+            f"AAT{index} VERIFIED"
+        )
+
+        print("=" * 80)
+
+        print(
+            json.dumps(
+                payload,
+                indent=2,
+            )
+        )
 
     print()
-    print("AAT₁ VERIFIED")
     print("=" * 80)
-    print(json.dumps(aat1_payload, indent=2))
 
-    print()
-    print("AAT₂ VERIFIED")
-    print("=" * 80)
-    print(json.dumps(aat2_payload, indent=2))
+    print(
+        f"CHAIN VERIFIED: {len(payloads)} tokens"
+    )
 
 
 if __name__ == "__main__":
