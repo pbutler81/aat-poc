@@ -1,4 +1,6 @@
 from pathlib import Path
+from threading import Lock
+from time import monotonic
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -15,8 +17,17 @@ app = FastAPI(
     title="AAT Resource Server"
 )
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+CHALLENGE_TTL_SECONDS = 300
+
+# In-memory challenge store:
+# encoded challenge -> monotonic expiry time
+#
+# Suitable for this single-process POC.
+# Multi-worker deployments need shared storage.
+_challenges: dict[str, float] = {}
+_challenge_lock = Lock()
 
 
 class DeployRequest(BaseModel):
@@ -31,6 +42,50 @@ def load_token(filename):
         return f.read().strip()
 
 
+def _remove_expired_challenges(now: float) -> None:
+    """Remove expired challenges. Caller must hold the lock."""
+    expired = [
+        challenge
+        for challenge, expiry in _challenges.items()
+        if expiry <= now
+    ]
+
+    for challenge in expired:
+        del _challenges[challenge]
+
+
+def _challenge_is_valid(encoded_challenge: str) -> bool:
+    """Check whether a challenge was issued and has not expired."""
+    now = monotonic()
+
+    with _challenge_lock:
+        _remove_expired_challenges(now)
+
+        expiry = _challenges.get(encoded_challenge)
+
+        return expiry is not None and expiry > now
+
+
+def _consume_challenge(encoded_challenge: str) -> bool:
+    """
+    Atomically consume a challenge.
+
+    Returns False if it is unknown, expired or already consumed.
+    """
+    now = monotonic()
+
+    with _challenge_lock:
+        _remove_expired_challenges(now)
+
+        expiry = _challenges.get(encoded_challenge)
+
+        if expiry is None or expiry <= now:
+            return False
+
+        del _challenges[encoded_challenge]
+        return True
+
+
 @app.get("/health")
 def health():
     return {
@@ -41,28 +96,27 @@ def health():
 @app.get("/challenge")
 def challenge():
     """
-    Generate a challenge that the token holder
-    must sign to prove possession of the private
-    key bound to the final AAT.
+    Issue a challenge that must be signed by the final
+    AAT holder.
 
-    NOTE:
-
-    At this stage of the POC the challenge is
-    cryptographically verified, but the server
-    does not yet maintain server-side state to
-    guarantee single-use.
-
-    Single-use challenge tracking is the next
-    security improvement.
+    Challenges expire after five minutes and can be
+    successfully consumed only once.
     """
+    raw_challenge = create_challenge()
+    encoded_challenge = encode_challenge(raw_challenge)
 
-    challenge = create_challenge()
+    now = monotonic()
+
+    with _challenge_lock:
+        _remove_expired_challenges(now)
+
+        _challenges[encoded_challenge] = (
+            now + CHALLENGE_TTL_SECONDS
+        )
 
     return {
-        "challenge": encode_challenge(
-            challenge
-        ),
-        "expires_in": 300,
+        "challenge": encoded_challenge,
+        "expires_in": CHALLENGE_TTL_SECONDS,
     }
 
 
@@ -70,12 +124,8 @@ def challenge():
 def deploy(
     request: DeployRequest,
     http_request: Request,
-    authorization: str | None = Header(
-        default=None
-    ),
-    x_aat_challenge: str | None = Header(
-        default=None
-    ),
+    authorization: str | None = Header(default=None),
+    x_aat_challenge: str | None = Header(default=None),
 ):
     # ---------------------------------------------------------
     # Authorization token
@@ -93,6 +143,14 @@ def deploy(
             detail="Invalid Authorization header",
         )
 
+    final_token = authorization[7:].strip()
+
+    if not final_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing bearer token",
+        )
+
     # ---------------------------------------------------------
     # Challenge
     # ---------------------------------------------------------
@@ -103,13 +161,25 @@ def deploy(
             detail="Missing X-AAT-Challenge header",
         )
 
+    try:
+        challenge = decode_challenge(x_aat_challenge)
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid challenge",
+        )
+
+    if not _challenge_is_valid(x_aat_challenge):
+        raise HTTPException(
+            status_code=401,
+            detail="Unknown, expired or already-used challenge",
+        )
+
     # ---------------------------------------------------------
     # Proof-of-possession signature
     # ---------------------------------------------------------
 
-    proof = http_request.headers.get(
-        "X-AAT-Proof"
-    )
+    proof = http_request.headers.get("X-AAT-Proof")
 
     if not proof:
         raise HTTPException(
@@ -118,47 +188,27 @@ def deploy(
         )
 
     # ---------------------------------------------------------
-    # Final delegated token supplied by caller
-    # ---------------------------------------------------------
-
-    final_token = authorization[7:]
-
-    # ---------------------------------------------------------
-    # Decode challenge
+    # Build delegation chain
+    #
+    # Current POC:
+    # AAT₀ and AAT₁ are loaded locally.
+    # The caller supplies AAT₂.
     # ---------------------------------------------------------
 
     try:
-        challenge = decode_challenge(
-            x_aat_challenge
-        )
-
-    except Exception:
+        tokens = [
+            load_token("aat0.jwt"),
+            load_token("aat1.jwt"),
+            final_token,
+        ]
+    except OSError:
         raise HTTPException(
-            status_code=401,
-            detail="Invalid challenge",
+            status_code=500,
+            detail="Unable to load delegation chain",
         )
 
     # ---------------------------------------------------------
-    # Build delegation chain
-    #
-    # For the current POC:
-    #
-    # AAT₀ and AAT₁ are known locally by the resource server.
-    #
-    # The caller supplies the final delegated token.
-    #
-    # Later we can improve this so the complete chain is
-    # supplied or reconstructed dynamically.
-    # ---------------------------------------------------------
-
-    tokens = [
-        load_token("aat0.jwt"),
-        load_token("aat1.jwt"),
-        final_token,
-    ]
-
-    # ---------------------------------------------------------
-    # Complete authorization
+    # Verify chain, proof-of-possession and authorization
     # ---------------------------------------------------------
 
     try:
@@ -172,19 +222,11 @@ def deploy(
                 "environment": request.environment,
             },
         )
-
-    except Exception as exc:
+    except Exception:
         raise HTTPException(
             status_code=401,
-            detail=(
-                "Token verification failed: "
-                f"{exc}"
-            ),
+            detail="Token verification failed",
         )
-
-    # ---------------------------------------------------------
-    # Valid token but insufficient authority
-    # ---------------------------------------------------------
 
     if not allowed:
         raise HTTPException(
@@ -193,7 +235,19 @@ def deploy(
         )
 
     # ---------------------------------------------------------
-    # Authorized operation
+    # Atomically consume the challenge
+    #
+    # Only one concurrent request can consume it successfully.
+    # ---------------------------------------------------------
+
+    if not _consume_challenge(x_aat_challenge):
+        raise HTTPException(
+            status_code=401,
+            detail="Unknown, expired or already-used challenge",
+        )
+
+    # ---------------------------------------------------------
+    # Authorized operation (simulated by this POC)
     # ---------------------------------------------------------
 
     return {

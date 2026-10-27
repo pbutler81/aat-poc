@@ -1,33 +1,40 @@
-from aat.keys import load_private_key
+from aat.keys import load_private_key, load_public_key
 from aat.pop import (
     create_challenge,
     sign_challenge,
     verify_token_proof,
 )
-from aat.verify import verify_token
-from aat.keys import load_public_key
+from aat.verify import verify_chain
 
 
 def main():
 
     # ---------------------------------------------------------
-    # Load AAT₂
+    # Load the complete AAT delegation chain
     # ---------------------------------------------------------
+
+    with open("aat0.jwt") as f:
+        aat0 = f.read().strip()
+
+    with open("aat1.jwt") as f:
+        aat1 = f.read().strip()
 
     with open("aat2.jwt") as f:
-        token = f.read().strip()
+        aat2 = f.read().strip()
 
     # ---------------------------------------------------------
-    # Decode/verify AAT₂
+    # Verify the full chain from the trusted root issuer
     # ---------------------------------------------------------
 
-    # For this test we know AAT₂ is signed by Agent B.
-    agent_b_public_key = load_public_key("agent-b")
+    issuer_public_key = load_public_key("issuer")
 
-    payload = verify_token(
-        token,
-        agent_b_public_key,
+    payloads = verify_chain(
+        [aat0, aat1, aat2],
+        issuer_public_key,
     )
+
+    # Use the verified final token (AAT₂) for the PoP test
+    payload = payloads[-1]
 
     # ---------------------------------------------------------
     # Resource server creates challenge
@@ -36,7 +43,7 @@ def main():
     challenge = create_challenge()
 
     # ---------------------------------------------------------
-    # Legitimate Tool Agent signs it
+    # Legitimate Tool Agent signs the challenge
     # ---------------------------------------------------------
 
     tool_agent_private_key = load_private_key(
@@ -49,7 +56,7 @@ def main():
     )
 
     # ---------------------------------------------------------
-    # Verify against the key embedded in AAT₂
+    # Verify proof against the key embedded in AAT₂
     # ---------------------------------------------------------
 
     valid = verify_token_proof(
@@ -61,7 +68,11 @@ def main():
     print()
     print("AAT₂ PROOF OF POSSESSION")
     print("=" * 80)
-    print(valid)
+    print(f"Delegation chain verified: True")
+    print(f"Proof of possession valid: {valid}")
+
+    if not valid:
+        raise SystemExit("Proof-of-possession test failed")
 
 
 if __name__ == "__main__":

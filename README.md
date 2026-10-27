@@ -5,6 +5,7 @@ A hands-on Python proof of concept exploring **Attenuating Authorization Tokens 
 The project is based on the IETF Internet-Draft:
 
 > OAuth Attenuating Agent Tokens
+
 > `draft-niyikiza-oauth-attenuating-agent-tokens-01`
 
 The goal is to understand and demonstrate how authorization can be passed through a chain of agents while ensuring that **each delegation can only reduce the authority available to the next participant**.
@@ -12,15 +13,25 @@ The goal is to understand and demonstrate how authorization can be passed throug
 The POC now includes:
 
 * Ed25519-signed JWTs
+
 * Holder binding using JWKs
+
 * Parent-token references
+
 * Capability attenuation
+
 * Delegation-depth enforcement
+
 * Arbitrary-length delegation-chain verification
+
 * Proof-of-possession
+
 * Authorization policy evaluation
+
 * Automated security tests
+
 * A FastAPI resource server
+
 * A working end-to-end HTTP authorization flow
 
 ---
@@ -63,15 +74,23 @@ If Agent A delegates authority to Agent B, how can the resource server know that
 
 This proof of concept explores a cryptographic delegation model where each child token:
 
-1. Is cryptographically signed.
-2. Identifies its parent token.
-3. Is signed by the holder of the parent token.
-4. Contains a restricted set of capabilities.
-5. Is bound to the key of the next holder.
-6. Can further restrict downstream delegation depth.
-7. Requires proof-of-possession of the final holder key.
-8. Can be validated as part of the complete delegation chain.
-9. Is evaluated against the actual resource request.
+1\. Is cryptographically signed.
+
+2\. Identifies its parent token.
+
+3\. Is signed by the holder of the parent token.
+
+4\. Contains a restricted set of capabilities.
+
+5\. Is bound to the key of the next holder.
+
+6\. Can further restrict downstream delegation depth.
+
+7\. Requires proof-of-possession of the final holder key.
+
+8\. Can be validated as part of the complete delegation chain.
+
+9\. Is evaluated against the actual resource request.
 
 The fundamental security property is:
 
@@ -98,28 +117,47 @@ The project is deliberately being built incrementally.
 The main goals are to understand:
 
 * Public/private key cryptography
+
 * Ed25519 signatures
+
 * JWTs
+
 * JSON Web Keys (JWKs)
+
 * Holder binding
+
 * Proof-of-possession
+
 * Delegation chains
+
 * Parent-token references
+
 * Capability attenuation
+
 * Delegation-depth attenuation
+
 * Authorization decisions
+
 * Agent-to-agent delegation
+
 * HTTP resource-server enforcement
+
 * Security attacks against delegated authorization
 
 The eventual goal is to integrate the model with:
 
 * OAuth
+
 * Keycloak
+
 * OAuth token exchange
+
 * Real agent services
+
 * LLM-based agents
+
 * Real HTTP APIs
+
 * Kubernetes/OpenShift
 
 ---
@@ -193,17 +231,14 @@ Root Issuer
     |
     +-- issuer private key
     +-- issuer public key
-
 Agent A
     |
     +-- Agent A private key
     +-- Agent A public key
-
 Agent B
     |
     +-- Agent B private key
     +-- Agent B public key
-
 Tool Agent
     |
     +-- Tool Agent private key
@@ -313,19 +348,29 @@ Child authority ⊆ Parent authority
 A child may:
 
 * Remove a capability.
+
 * Add a restriction.
+
 * Narrow an existing capability.
+
 * Delegate to another holder.
+
 * Reduce the maximum permitted delegation depth.
 
 A child must not:
 
 * Add a new capability.
+
 * Remove an existing parent restriction.
+
 * Broaden an existing constraint.
+
 * Change its relationship to the supplied parent.
+
 * Pretend to have been signed by another holder.
+
 * Reset or skip delegation depth.
+
 * Increase the maximum permitted delegation depth.
 
 ---
@@ -340,7 +385,6 @@ Private Key
     | signs
     v
    JWT
-
 Public Key
     |
     | verifies
@@ -362,7 +406,6 @@ issuer-private
       | holder = Agent A
       v
    Agent A
-
 agent-a-private
       |
       | signs
@@ -372,7 +415,6 @@ agent-a-private
       | holder = Agent B
       v
    Agent B
-
 agent-b-private
       |
       | signs
@@ -420,10 +462,15 @@ __pycache__/
 For a real implementation, private keys should use protected storage such as:
 
 * HSM
+
 * Cloud KMS
+
 * Vault
+
 * TPM
+
 * Workload identity
+
 * OS key stores
 
 Local PEM files are used only for the POC.
@@ -472,6 +519,7 @@ aat-poc/
 │   ├── test_authorization.py
 │   ├── test_attacks.py
 │   ├── test_depth.py
+│   ├── test_replay.py
 │   └── client.py
 │
 ├── keys/
@@ -498,7 +546,6 @@ Create a virtual environment:
 
 ```bash
 cd ~/workspace/aat-poc
-
 python3 -m venv .venv
 ```
 
@@ -810,12 +857,17 @@ The POC deliberately uses a simple constraint model.
 
 Current rules are:
 
-1. `*` means any value.
-2. A specific parent value must be retained by the child.
-3. A child may add additional restrictions.
-4. A child may remove capabilities.
-5. A child cannot add new capabilities.
-6. A child cannot broaden an existing constraint.
+1\. `*` means any value.
+
+2\. A specific parent value must be retained by the child.
+
+3\. A child may add additional restrictions.
+
+4\. A child may remove capabilities.
+
+5\. A child cannot add new capabilities.
+
+6\. A child cannot broaden an existing constraint.
 
 For example:
 
@@ -911,7 +963,6 @@ For example:
 
 ```text
 Parent:
-
 del_depth = 1
 del_max_depth = 3
 ```
@@ -920,7 +971,6 @@ This child is invalid:
 
 ```text
 Child:
-
 del_depth = 2
 del_max_depth = 10
 ```
@@ -933,7 +983,6 @@ For example:
 
 ```text
 Parent:
-
 del_depth = 1
 del_max_depth = 3
 ```
@@ -942,7 +991,6 @@ may delegate:
 
 ```text
 Child:
-
 del_depth = 2
 del_max_depth = 2
 ```
@@ -955,17 +1003,11 @@ The verifier enforces:
 
 ```text
 1. del_depth must be valid.
-
 2. del_max_depth must be valid.
-
 3. The root must begin at del_depth = 0.
-
 4. A child increments del_depth by exactly one.
-
 5. A child cannot increase del_max_depth.
-
 6. A child cannot exceed del_max_depth.
-
 7. A child may lower del_max_depth.
 ```
 
@@ -984,16 +1026,13 @@ The current results are:
 ```text
 AAT DELEGATION DEPTH SECURITY TESTS
 ================================================================================
-
 AAT₁: depth=1 max=3
-
 ✅ Legitimate depth 1 -> 2: allowed
 ✅ Reset delegation depth to 0: blocked
 ✅ Skip from depth 1 to depth 3: blocked
 ✅ Increase del_max_depth from 3 to 10: blocked
 ✅ Child depth exceeds del_max_depth: blocked
 ✅ Lower del_max_depth from 3 to 2: allowed
-
 ================================================================================
 DEPTH TESTS COMPLETE
 ```
@@ -1002,7 +1041,6 @@ This demonstrates both:
 
 ```text
 CAPABILITY ATTENUATION
-
 deploy(*)
    |
    v
@@ -1016,7 +1054,6 @@ and:
 
 ```text
 DELEGATION ATTENUATION
-
 max_depth = 3
    |
    v
@@ -1056,13 +1093,19 @@ tokens = [
 
 The verifier:
 
-1. Verifies the root token using the trusted Root Issuer public key.
-2. Walks each remaining token in order.
-3. Verifies each child using the holder key from its parent.
-4. Verifies the parent reference.
-5. Verifies capability attenuation.
-6. Verifies delegation-depth rules.
-7. Returns the verified payloads.
+1\. Verifies the root token using the trusted Root Issuer public key.
+
+2\. Walks each remaining token in order.
+
+3\. Verifies each child using the holder key from its parent.
+
+4\. Verifies the parent reference.
+
+5\. Verifies capability attenuation.
+
+6\. Verifies delegation-depth rules.
+
+7\. Returns the verified payloads.
 
 Conceptually:
 
@@ -1215,7 +1258,9 @@ PYTHONPATH=. python tests/test_pop.py
 The tests demonstrate:
 
 * Correct private key succeeds.
+
 * Wrong private key fails.
+
 * A proof generated for another challenge fails.
 
 Token-bound PoP can also be tested using:
@@ -1312,7 +1357,7 @@ Token chain
 verify_chain(tokens)
     |
     v
-verified payloads
+Verified payloads
     |
     v
 final_payload = payloads[-1]
@@ -1320,7 +1365,8 @@ final_payload = payloads[-1]
     +-------------------+
     |                   |
     v                   v
-Verify PoP         Evaluate policy
+Verify proof-of-       Evaluate
+possession (PoP)       authorization policy
     |                   |
     +---------+---------+
               |
@@ -1544,9 +1590,7 @@ DENY
 
 This protects against using a proof with a different challenge.
 
-However, **reusing the exact same valid challenge and proof is not yet prevented server-side**.
-
-That is the next major security improvement.
+The resource server also tracks issued challenges in memory, enforces a five-minute lifetime, and consumes a challenge after a successful authorised deployment. Reusing the exact same challenge and proof after a successful request is rejected with HTTP 401. This behaviour is covered by `tests/test_replay.py`.
 
 ---
 
@@ -1606,52 +1650,15 @@ Encoding the complete object avoids the client and server independently reconstr
 
 ---
 
-# 41. Current Challenge Limitation
+# 41. Challenge Lifetime and Single-Use Enforcement
 
-The challenge response advertises:
+The challenge endpoint returns expires_in = 300, giving each challenge a five-minute validity period.
 
-```text
-expires_in = 300
-```
+The resource server maintains an in-memory record of issued challenges and their expiry times. Before authorising a deployment, it checks that the supplied challenge is recognised, has not expired, and has not already been used. Once the token chain, proof-of-possession and requested capability have been successfully validated, the challenge is marked as consumed.
 
-The intended challenge properties are:
+This ensures that a challenge and its associated proof cannot be reused for another successful deployment. The integration test tests/test_replay.py verifies this behaviour: the first request returns HTTP 200, while a second request using the same challenge and proof is rejected with HTTP 401.
 
-```text
-fresh
-+
-unpredictable
-+
-short-lived
-+
-bound to the proof
-+
-single-use
-```
-
-The current implementation cryptographically binds a proof to its challenge.
-
-However, the resource server does **not yet maintain server-side challenge state**.
-
-Therefore:
-
-```text
-Proof for Challenge A
-        |
-        X
-Challenge B
-```
-
-is blocked.
-
-But:
-
-```text
-Challenge A + valid proof
-```
-
-could currently be replayed using that exact same challenge/proof pair.
-
-The next security improvement is to track challenge issuance and consumption server-side.
+Current limitation: Challenge state is stored in the resource server's process memory. It is lost when the server restarts and is not shared across multiple workers or instances. Production use would require shared challenge storage with atomic consumption to prevent concurrent requests from reusing the same challenge. Challenges are consumed only after successful authorisation, so requests that fail proof-of-possession or policy validation do not consume them.
 
 ---
 
@@ -1726,26 +1733,26 @@ Construct token chain
       v
 Verify complete chain
       |
-      +------------------+
-      |                  |
-    valid             invalid
-      |                  |
-      v                  v
+      +-------------------+
+      |                   |
+    valid               invalid
+      |                   |
+      v                   v
 Verify PoP              DENY
       |
-      +------------------+
-      |                  |
-    valid             invalid
-      |                  |
-      v                  v
+      +-------------------+
+      |                   |
+    valid               invalid
+      |                   |
+      v                   v
 Evaluate policy         DENY
       |
-      +------------------+
-      |                  |
-    allow               deny
-      |                  |
-      v                  v
-     200                403
+      +-------------------+
+      |                   |
+    allow                deny
+      |                   |
+      v                   v
+   HTTP 200            HTTP 403
 ```
 
 ---
@@ -1772,7 +1779,6 @@ Server filesystem
     |
     +-- AAT₀
     +-- AAT₁
-
 HTTP request
     |
     +-- AAT₂
@@ -1794,7 +1800,6 @@ Therefore there are two separate concepts:
 
 ```text
 CHAIN VERIFICATION
-
 Arbitrary length
       |
       v
@@ -1805,7 +1810,6 @@ versus:
 
 ```text
 HTTP CHAIN DISCOVERY / TRANSPORT
-
 Currently simplified
       |
       v
@@ -1832,13 +1836,19 @@ PYTHONPATH=. python tests/client.py
 
 The client:
 
-1. Requests a challenge.
-2. Receives the encoded challenge.
-3. Decodes it.
-4. Signs it using the Tool Agent private key.
-5. Loads the final AAT.
-6. Sends the token, challenge, proof and requested deployment.
-7. Displays the response.
+1\. Requests a challenge.
+
+2\. Receives the encoded challenge.
+
+3\. Decodes it.
+
+4\. Signs it using the Tool Agent private key.
+
+5\. Loads the final AAT.
+
+6\. Sends the token, challenge, proof and requested deployment.
+
+7\. Displays the response.
 
 ---
 
@@ -1918,77 +1928,7 @@ Expired tokens being rejected is expected security behaviour.
 
 # 49. Current Run Sequence
 
-Activate the environment:
-
-```bash
-cd ~/workspace/aat-poc
-source .venv/bin/activate
-```
-
-Generate keys if required:
-
-```bash
-PYTHONPATH=. python tests/generate_keys.py
-```
-
-Generate the token chain:
-
-```bash
-PYTHONPATH=. python issuer/issuer.py
-PYTHONPATH=. python agents/agent_a.py
-PYTHONPATH=. python agents/agent_b.py
-```
-
-Verify the chain:
-
-```bash
-PYTHONPATH=. python tests/verify_chain.py
-```
-
-Run policy tests:
-
-```bash
-PYTHONPATH=. python tests/test_policy.py
-```
-
-Run authorization tests:
-
-```bash
-PYTHONPATH=. python tests/test_authorization.py
-```
-
-Run PoP tests:
-
-```bash
-PYTHONPATH=. python tests/test_pop.py
-PYTHONPATH=. python tests/test_aat_pop.py
-```
-
-Run attack tests:
-
-```bash
-PYTHONPATH=. python tests/test_attacks.py
-```
-
-Run delegation-depth tests:
-
-```bash
-PYTHONPATH=. python tests/test_depth.py
-```
-
-Start the server:
-
-```bash
-PYTHONPATH=. uvicorn server.server:app --host 0.0.0.0 --port 8000
-```
-
-In another terminal:
-
-```bash
-cd ~/workspace/aat-poc
-source .venv/bin/activate
-PYTHONPATH=. python tests/client.py
-```
+For the canonical setup, key-generation, token-generation, test, server-start, and end-to-end client commands, use the **Quick Start** in section 67. Keeping one canonical command sequence helps avoid drift between duplicated instructions.
 
 ---
 
@@ -2146,12 +2086,10 @@ For example:
 
 ```text
 Agent B authority:
-
 deploy(
     namespace=payments,
     environment=production
 )
-
 del_depth = 2
 del_max_depth = 2
 ```
@@ -2160,9 +2098,7 @@ means:
 
 ```text
 Agent B / Tool may perform the permitted action
-
 BUT
-
 the authority cannot be delegated again.
 ```
 
@@ -2177,43 +2113,30 @@ The implementation currently aims to enforce:
 ```text
 Invariant 1:
 A token must have a valid signature.
-
 Invariant 2:
 A child must be signed by the holder of its parent.
-
 Invariant 3:
 A child must reference its actual parent.
-
 Invariant 4:
 A child cannot have more capability authority than its parent.
-
 Invariant 5:
 The root delegation depth must begin at 0.
-
 Invariant 6:
 A child must increment delegation depth by exactly one.
-
 Invariant 7:
 A child cannot increase del_max_depth.
-
 Invariant 8:
 A child cannot exceed del_max_depth.
-
 Invariant 9:
 A child may lower del_max_depth.
-
 Invariant 10:
 The final holder must prove possession of its private key.
-
 Invariant 11:
 A proof must correspond to the supplied challenge.
-
 Invariant 12:
 Expired tokens cannot be used.
-
 Invariant 13:
 The requested action must be permitted by the final token.
-
 Invariant 14:
 The resource server makes the final authorization decision.
 ```
@@ -2225,86 +2148,150 @@ The resource server makes the final authorization decision.
 ## Core Cryptography
 
 * [x] Ed25519 key generation
+
 * [x] Private/public key loading
+
 * [x] JWT signing
+
 * [x] JWT verification
+
 * [x] Public-key JWK representation
 
 ## AAT
 
 * [x] Root AAT
+
 * [x] Holder binding
+
 * [x] Authorization details
+
 * [x] Parent token hashing
+
 * [x] Agent A delegation
+
 * [x] Agent B delegation
+
 * [x] Capability attenuation
+
 * [x] Delegation-depth claims
+
 * [x] Maximum delegation-depth attenuation
 
 ## Verification
 
 * [x] Root signature verification
+
 * [x] Child signature verification
+
 * [x] Parent-reference verification
+
 * [x] Capability attenuation verification
+
 * [x] Token expiry verification
+
 * [x] Delegation-depth verification
+
 * [x] Prevent depth reset
+
 * [x] Prevent depth skipping
+
 * [x] Prevent increasing `del_max_depth`
+
 * [x] Prevent exceeding `del_max_depth`
+
 * [x] Allow lowering `del_max_depth`
+
 * [x] Arbitrary-length chain verification
 
 ## Proof-of-Possession
 
 * [x] Challenge generation
+
 * [x] Challenge encoding
+
 * [x] Challenge decoding
+
 * [x] Challenge signing
+
 * [x] Signature verification
+
 * [x] Token-bound holder verification
+
 * [x] Wrong-key rejection
+
 * [x] Different-challenge rejection
+
+* [x] Single-use challenge enforcement
+
+* [x] Server-side challenge expiry
+
 * [x] HTTP challenge/proof flow
 
 ## Authorization
 
 * [x] Capability lookup
+
 * [x] Constraint checking
+
 * [x] Authorization decision layer
+
 * [x] Resource-server enforcement
+
 * [x] Token-list based authorization
+
 * [x] Authorization using final verified payload
+
 * [x] Chain-length-agnostic authorization layer
 
 ## HTTP
 
 * [x] FastAPI resource server
+
 * [x] `/health`
+
 * [x] `/challenge`
+
 * [x] `/deploy`
+
 * [x] Bearer AAT handling
+
 * [x] Challenge transport
+
 * [x] PoP transport
+
 * [x] End-to-end HTTP client
+
 * [x] Successful authorized deployment response
+
+* [x] Single-use challenge replay rejection (HTTP 401)
 
 ## Security Tests
 
 * [x] JWT tampering
+
 * [x] Capability escalation
+
 * [x] Constraint broadening
+
 * [x] Parent substitution
+
 * [x] Wrong child signing key
+
 * [x] Wrong PoP key
+
 * [x] Proof against different challenge
+
 * [x] Delegation-depth reset
+
 * [x] Delegation-depth skipping
+
 * [x] Maximum-depth escalation
+
 * [x] Maximum-depth exceedance
+
 * [x] Maximum-depth attenuation
+
+* [x] HTTP replay-protection integration test
 
 ---
 
@@ -2312,15 +2299,9 @@ The resource server makes the final authorization decision.
 
 This remains an educational proof of concept.
 
-## Challenge Replay
+## Challenge Replay and Expiry
 
-The server does not yet track issued and consumed challenges.
-
-A proof cannot be reused with a different challenge, but the exact same valid challenge/proof pair is not yet guaranteed to be single-use.
-
-## Challenge Expiry
-
-The HTTP response advertises a 300-second lifetime, but server-side challenge-state enforcement still needs to be strengthened.
+The current POC uses process-local in-memory challenge tracking with a five-minute expiry and single-use consumption after successful authorisation. The HTTP replay integration test is documented in section 41 and exercised by `tests/test_replay.py`. The store is cleared on restart and is not shared across workers or instances; production use requires shared storage with atomic consumption.
 
 ## Constraint Semantics
 
@@ -2372,75 +2353,9 @@ It does not currently modify Kubernetes or OpenShift resources.
 
 ---
 
-# 57. Next Security Step — Single-Use Challenges
+# 57. Implemented — Single-Use Challenge Replay Protection
 
-The immediate next security improvement is server-side challenge tracking.
-
-The desired behaviour is:
-
-```text
-GET /challenge
-      |
-      v
-Server generates Challenge A
-      |
-      v
-Server records Challenge A as UNUSED
-      |
-      v
-Client signs Challenge A
-      |
-      v
-POST /deploy
-      |
-      v
-Server verifies Challenge A
-      |
-      v
-Server atomically marks Challenge A as USED
-      |
-      v
-Request succeeds
-```
-
-If the same request is replayed:
-
-```text
-Challenge A
-+
-same valid proof
-      |
-      v
-Server checks state
-      |
-      v
-Challenge already USED
-      |
-      v
-DENY
-```
-
-The desired test is:
-
-```text
-First request:
-200 OK
-
-Replay same challenge + proof:
-401 Unauthorized
-```
-
-Challenges should eventually be:
-
-```text
-fresh
-+
-unpredictable
-+
-short-lived
-+
-single-use
-```
+Single-use challenge tracking, five-minute expiry, and HTTP replay rejection are implemented and covered by `tests/test_replay.py`. The first valid deployment request returns HTTP 200; replaying the same challenge and proof returns HTTP 401. See section 41 for the implementation details and limitations.
 
 ---
 
@@ -2449,44 +2364,81 @@ single-use
 Completed during the current security-hardening phase:
 
 * [x] Enforce delegation depth
+
 * [x] Prevent delegation-depth reset
+
 * [x] Prevent delegation-depth skipping
+
 * [x] Prevent increasing `del_max_depth`
+
 * [x] Allow attenuation of `del_max_depth`
+
 * [x] Support arbitrary delegation-chain lengths
+
 * [x] Make `verify_chain()` chain-length agnostic
+
 * [x] Make authorization accept a token chain
+
 * [x] Authorize using the final verified payload
+
 * [x] Add delegation-depth security tests
 
 Remaining:
 
-* [ ] Add server-side single-use challenge state
-* [ ] Reject reuse of an already consumed challenge
-* [ ] Enforce challenge expiration server-side
-* [ ] Add replay-cache behaviour
+* [x] Add server-side single-use challenge state (in-memory POC implementation)
+
+* [x] Reject reuse of an already consumed challenge
+
+* [x] Enforce challenge expiration server-side (five-minute lifetime)
+
+* [x] Add HTTP integration test for replaying the same challenge and proof
+
+* [ ] Replace process-local challenge state with shared storage for multi-worker/production deployments
+
 * [ ] Improve constraint semantics
+
 * [ ] Improve parent-reference semantics
+
 * [ ] Strengthen malformed-token validation
+
 * [ ] Add skipped-parent tests
+
 * [ ] Add holder-substitution tests
+
 * [ ] Add more expired-token tests
+
 * [ ] Add issuer validation hardening
+
 * [ ] Add audience validation
+
 * [ ] Add key IDs (`kid`)
+
 * [ ] Add JWKS
+
 * [ ] Add key rotation
+
 * [ ] Add revocation
+
 * [ ] Replace static token files
+
 * [ ] Replace local private-key storage
+
 * [ ] Add structured security logging
+
 * [ ] OAuth integration
+
 * [ ] Keycloak integration
+
 * [ ] OAuth token exchange
+
 * [ ] Real agent services
+
 * [ ] LLM agent
+
 * [ ] Real tool/API integration
+
 * [ ] Kubernetes integration
+
 * [ ] OpenShift integration
 
 ---
@@ -2499,115 +2451,96 @@ Basic signed token
     |
     v
 COMPLETE
-
 Phase 2
 Capabilities
     |
     v
 COMPLETE
-
 Phase 3
 Capability attenuation
     |
     v
 COMPLETE
-
 Phase 4
 Delegation chain
     |
     v
 COMPLETE
-
 Phase 5
 Offline chain verification
     |
     v
 COMPLETE
-
 Phase 6
 Proof-of-possession
     |
     v
 COMPLETE
-
 Phase 7
 Authorization policy
     |
     v
 COMPLETE
-
 Phase 8
 Attack/security tests
     |
     v
 COMPLETE
-
 Phase 9
 FastAPI resource server
     |
     v
 COMPLETE
-
 Phase 10
 HTTP proof-of-possession
     |
     v
 COMPLETE
-
 Phase 11
 End-to-end HTTP authorization
     |
     v
 COMPLETE
-
 Phase 12
 Delegation-depth enforcement
     |
     v
 COMPLETE
-
 Phase 13
 Arbitrary-length chain verification
     |
     v
 COMPLETE
-
 Phase 14
 Single-use challenge / replay protection
     |
     v
-NEXT
-
+COMPLETE
 Phase 15
 Further security hardening
     |
     v
 PLANNED
-
 Phase 16
 OAuth integration
     |
     v
 PLANNED
-
 Phase 17
 Keycloak integration
     |
     v
 PLANNED
-
 Phase 18
 Real agent workflow
     |
     v
 PLANNED
-
 Phase 19
 LLM agent
     |
     v
 PLANNED
-
 Phase 20
 Real tool / OpenShift integration
     |
@@ -2646,12 +2579,19 @@ Resource Server
 Areas to investigate include:
 
 * OAuth authorization
+
 * Token exchange
+
 * Sender-constrained tokens
+
 * Proof-of-possession
+
 * Client authentication
+
 * Audience restrictions
+
 * Token lifetime
+
 * Revocation
 
 ---
@@ -2685,13 +2625,21 @@ The eventual architecture may resemble:
 Potential areas to explore include:
 
 * Keycloak clients
+
 * OAuth token exchange
+
 * JWT signing
+
 * Custom claims
+
 * Protocol mappers
+
 * Authorization services
+
 * Client authentication
+
 * Sender-constrained tokens
+
 * Custom protocol extensions
 
 ---
@@ -2978,6 +2926,9 @@ Run security tests:
 ```bash
 PYTHONPATH=. python tests/test_attacks.py
 PYTHONPATH=. python tests/test_depth.py
+PYTHONPATH=. python tests/test_aat_pop.py
+PYTHONPATH=. python tests/test_authorization.py
+PYTHONPATH=. python tests/test_replay.py
 ```
 
 Start the resource server:
@@ -3048,7 +2999,6 @@ The major security properties currently demonstrated are:
 
 ```text
 A downstream agent cannot:
-
 - invent a capability
 - broaden an existing constraint
 - substitute a parent
@@ -3084,19 +3034,33 @@ It is **not a production-ready authorization system**.
 The current implementation deliberately simplifies or does not yet implement:
 
 * Rich constraint semantics
+
 * Dynamic chain discovery
+
 * Production parent-reference semantics
+
 * Production key storage
-* Server-side single-use challenge management
-* Complete replay prevention
+
+* Shared, multi-instance challenge storage (the current challenge store is in-memory)
+
+* Production-grade replay prevention across distributed workers/instances
+
 * Key IDs
+
 * JWKS
+
 * Key rotation
+
 * Revocation
+
 * Full issuer/audience policy
+
 * OAuth integration
+
 * Keycloak integration
+
 * Real agent infrastructure
+
 * Real Kubernetes/OpenShift deployment behaviour
 
 Delegation-depth enforcement itself is now implemented; it is no longer a future limitation.
@@ -3190,17 +3154,9 @@ Resource Server
 ALLOW / DENY
 ```
 
-The immediate next step is:
+The HTTP proof-of-possession flow now includes server-side challenge state, five-minute expiry enforcement and single-use challenge consumption. The replay integration test verifies that reusing a successful request's challenge and proof is rejected.
 
-```text
-Server-side challenge state
-        +
-Challenge expiration enforcement
-        +
-Single-use challenge consumption
-        =
-Replay-resistant HTTP PoP
-```
+The next hardening priorities are shared challenge storage for multi-worker deployments, broader malformed-token and claim validation, stronger constraint semantics, and then OAuth/Keycloak integration.
 
 After that, the project can continue toward:
 
